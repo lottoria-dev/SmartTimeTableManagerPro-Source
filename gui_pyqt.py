@@ -23,7 +23,7 @@ class TimetableWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Smart Timetable Manager Pro v1.2.0")
-        self.resize(1400, 950)
+        self.resize(1520, 750)
         
         self.force_light_palette()
         self.setStyleSheet(STYLE_SHEET)
@@ -852,7 +852,7 @@ class TimetableWindow(QMainWindow):
     
     def render_all_week(self):
         self.add_header("학반", 0, 0)
-        self.grid_layout.setColumnMinimumWidth(0, 80)
+        self.grid_layout.setColumnMinimumWidth(0, 50)
         
         classes = self.logic.get_all_sorted_classes()
         total_rows = len(classes) + 1  
@@ -886,7 +886,7 @@ class TimetableWindow(QMainWindow):
         target_day = self.combo_sel.currentText()
         if not target_day: return
         self.add_header("학반", 0, 0)
-        self.grid_layout.setColumnMinimumWidth(0, 80)
+        self.grid_layout.setColumnMinimumWidth(0, 50)
         limit = config.PERIODS_PER_DAY[target_day]
         for p in range(1, limit + 1):
             self.add_header(f"{p}교시", 0, p)
