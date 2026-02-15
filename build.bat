@@ -21,14 +21,14 @@ pyinstaller --noconsole --onefile --clean ^
     --icon="icon.ico" ^
     --add-data "icon.ico;." ^
     --add-data "logo.png;." ^
-    --name="SmartTimetable_AI" ^
+    --name="SmartTimetableManagerPro" ^
     main_pyqt.py
 
 :: 3. 결과 안내
 echo.
-if exist "dist\SmartTimetable_AI.exe" (
+if exist "dist\SmartTimetableManagerPro.exe" (
     echo [3/3] 빌드 성공! 
-    echo 'dist' 폴더 안에 'SmartTimetable_AI.exe' 파일이 생성되었습니다.
+    echo 'dist' 폴더 안에 'SmartTimetableManagerPro.exe' 파일이 생성되었습니다.
     explorer "dist"
 ) else (
     echo [오류] 빌드에 실패했습니다. 위의 에러 메시지를 확인해주세요.
