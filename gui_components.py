@@ -1,14 +1,14 @@
-from PyQt6.QtWidgets import (
+from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QTextEdit, QTextBrowser, QPushButton, QFrame, 
-    QLabel, QSizePolicy, QTreeWidget, QTreeWidgetItem, QHBoxLayout
+    QLabel, QSizePolicy, QTreeWidget, QTreeWidgetItem
 )
-from PyQt6.QtCore import Qt, pyqtSignal
+from PySide6.QtCore import Qt, Signal
 
 class HelpDialog(QDialog):
     """도움말 팝업창"""
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("사용법 안내 - v1.2.0")
+        self.setWindowTitle("사용법 안내 - v1.2.1")
         self.resize(650, 600)
         self.setStyleSheet("background-color: white; color: #333333;")
         
@@ -19,8 +19,9 @@ class HelpDialog(QDialog):
         text_edit.setFrameShape(QFrame.Shape.NoFrame)
         text_edit.setStyleSheet("font-family: 'Malgun Gothic'; font-size: 11pt; color: #333333; background-color: white;")
         
+        # [수정] 개발자 정보에 lottoria 적용
         help_content = """
-<h2>📖 스마트 시간표 매니저 v1.2.0</h2>
+<h2>📖 스마트 시간표 매니저 v1.2.1</h2>
 <hr>
 <h3>1. 기본 사용법</h3>
 <ul>
@@ -68,10 +69,11 @@ class HelpDialog(QDialog):
 <hr>
 <div style="font-size: 10pt; color: #555; line-height: 1.4;">
     <b>■ 개발자 정보</b><br>
-    - 버전: 1.2.0 (2026.02.15)<br>
+    - 버전: 1.2.1 (2026.02.15)<br>
+    - 개발: lottoria<br>
     - 문의: trsketch@gmail.com<br>
     - 본 프로그램은 무단 재배포 및 상업적 이용이 금지되어 있습니다.<br>
-    © Copyright 2026. All rights reserved.
+    © Copyright 2026 lottoria. All rights reserved.
 </div>
 """
         text_edit.setHtml(help_content)
@@ -86,7 +88,7 @@ class HelpDialog(QDialog):
         layout.addWidget(btn_close)
 
 class LogDialog(QDialog):
-    """[v1.2.0] 변경 내역을 보여주는 별도 팝업창"""
+    """[v1.2.1] 변경 내역을 보여주는 별도 팝업창"""
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("변경 내역 (Log)")
@@ -119,7 +121,6 @@ class LogDialog(QDialog):
                 item = QTreeWidgetItem([str(log.get('type','')), str(log.get('class','')), str(log.get('desc',''))])
                 self.tree_widget.addTopLevelItem(item)
         
-        # 스크롤 최하단으로 이동
         if self.tree_widget.topLevelItemCount() > 0:
             last_item = self.tree_widget.topLevelItem(self.tree_widget.topLevelItemCount() - 1)
             self.tree_widget.scrollToItem(last_item)
@@ -127,8 +128,8 @@ class LogDialog(QDialog):
 
 class ClickableFrame(QFrame):
     """클릭 이벤트를 처리하는 커스텀 프레임 (시간표 셀)"""
-    clicked = pyqtSignal(object)
-    right_clicked = pyqtSignal(object)
+    clicked = Signal(object) # pyqtSignal -> Signal
+    right_clicked = Signal(object)
 
     def __init__(self, data_key, parent=None):
         super().__init__(parent)
@@ -137,7 +138,6 @@ class ClickableFrame(QFrame):
         self.setObjectName("Cell")
         
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.MinimumExpanding)
-        # [수정] 셀의 최소 높이를 더 줄여 수직 공간 확보 (32 -> 30)
         self.setMinimumHeight(30)
 
         self.layout = QVBoxLayout(self)
@@ -176,7 +176,6 @@ class ClickableFrame(QFrame):
         main_style = f"font-size: 10px; border: none; background-color: transparent; padding: 0px; margin: 0px; margin-bottom: -1px; font-weight: bold; color: {text_color};"
         self.lbl_main.setStyleSheet(main_style)
 
-        # 기본 스타일
         base_style = f"""
             background-color: {bg_color}; 
             border-radius: 4px;
@@ -187,12 +186,10 @@ class ClickableFrame(QFrame):
             base_style += " border: 1px solid #e5e7eb;"
         base_style += " padding: 0px;"
         
-        # [v1.2.0] Hover 효과 추가 (테두리 강조 및 밝기 조절 효과)
-        # 마우스 오버 시 테두리를 진하게 하고 그림자 효과 느낌을 줌
         hover_style = f"""
             QFrame#Cell:hover {{
                 border: 2px solid #9ca3af;
-                background-color: {bg_color}; /* 배경색 유지하되 필터 효과 등을 위해 분리 가능 */
+                background-color: {bg_color}; 
             }}
         """
 

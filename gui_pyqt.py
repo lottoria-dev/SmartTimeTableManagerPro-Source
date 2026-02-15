@@ -2,15 +2,15 @@ import sys
 import os
 import re  
 from datetime import datetime 
-from PyQt6.QtWidgets import (
+from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
     QPushButton, QLabel, QFrame, QScrollArea, QGridLayout, 
     QComboBox, QMessageBox, QFileDialog, QSplitter, QButtonGroup, 
     QRadioButton, QCheckBox, QAbstractItemView, QSizePolicy, 
     QDialog, QTextEdit, QLayout
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QSize, QMimeData 
-from PyQt6.QtGui import QFont, QColor, QPalette, QIcon, QKeyEvent, QCloseEvent
+from PySide6.QtCore import Qt, Signal, QSize, QMimeData # pyqtSignal -> Signal
+from PySide6.QtGui import QFont, QColor, QPalette, QIcon, QKeyEvent, QCloseEvent
 
 import config
 from logic import TimetableLogic
@@ -75,7 +75,6 @@ class TimetableWindow(QMainWindow):
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         
-        # [v1.2.0] 여백 최소화 (5 -> 2, Spacing 10 -> 5)
         main_layout = QVBoxLayout(central_widget)
         main_layout.setContentsMargins(2, 2, 2, 2)
         main_layout.setSpacing(5)
@@ -174,7 +173,6 @@ class TimetableWindow(QMainWindow):
         top_layout.addWidget(self.context_stack)
         top_layout.addStretch()
         
-        # [v1.2.0] 로그 버튼 추가
         btn_log = QPushButton("📜 내역")
         btn_log.clicked.connect(self.show_log_dialog)
         top_layout.addWidget(btn_log)
@@ -189,9 +187,7 @@ class TimetableWindow(QMainWindow):
 
         main_layout.addWidget(top_panel)
 
-        # 2. 메인 콘텐츠 (Splitter 제거 -> 단일 Grid Panel)
-        # [v1.2.0] 로그창을 분리했으므로 Splitter 제거하고 Grid만 남김
-        
+        # 2. 메인 콘텐츠
         grid_group = QFrame()
         grid_group.setObjectName("Card")
         grid_group_layout = QVBoxLayout(grid_group)
@@ -200,7 +196,7 @@ class TimetableWindow(QMainWindow):
         option_bar = QFrame()
         option_bar.setStyleSheet("background-color: #f9fafb; border-bottom: 1px solid #e5e7eb;")
         option_layout = QHBoxLayout(option_bar)
-        option_layout.setContentsMargins(10, 5, 10, 5) # 여백 축소
+        option_layout.setContentsMargins(10, 5, 10, 5) 
         option_layout.addWidget(QLabel("보기 방식:"))
         
         self.view_btn_group = QButtonGroup(self)
@@ -231,13 +227,12 @@ class TimetableWindow(QMainWindow):
         grid_group_layout.addWidget(self.scroll_area)
         
         self.status_bar = QLabel(" 파일을 불러와주세요.")
-        self.status_bar.setFixedHeight(24) # 높이 축소
+        self.status_bar.setFixedHeight(24) 
         self.status_bar.setStyleSheet("background-color: #ffffff; color: #3b82f6; font-weight: bold; padding-left: 10px; font-size: 11px;")
         grid_group_layout.addWidget(self.status_bar)
 
         main_layout.addWidget(grid_group)
 
-    # [v1.2.0] 종료 시 저장 확인 로직
     def closeEvent(self, event: QCloseEvent):
         if self.logic.is_modified:
             reply = QMessageBox.question(
@@ -248,7 +243,6 @@ class TimetableWindow(QMainWindow):
             
             if reply == QMessageBox.StandardButton.Yes:
                 self.save_csv()
-                # 저장 취소 시 종료도 취소
                 if self.logic.is_modified: 
                     event.ignore()
                     return
@@ -459,8 +453,8 @@ class TimetableWindow(QMainWindow):
         self.use_ai_mode = btn.property("use_ai")
         self.cover_widget.setVisible(False)
         msg = ""
-        if self.work_mode == "VIEW": msg = "[조회 모드] 수업 클릭 시 교사의 모든 수업 강조.(우클릭 시 잠금)"
-        elif self.work_mode == "SWAP": msg = "[맞교환 모드] 바꿀 두 수업을 순서대로 클릭.(교환 추천 시간은 초록색)"
+        if self.work_mode == "VIEW": msg = "[조회 모드] 수업 클릭 시 교사 일정 강조. 우클릭 시 잠금."
+        elif self.work_mode == "SWAP": msg = "[맞교환 모드] 바꿀 두 수업을 순서대로 클릭."
         elif self.work_mode == "COVER":
             msg = "[보강 모드] 보강할 수업 선택."
             self.cover_widget.setVisible(True)
@@ -700,8 +694,6 @@ class TimetableWindow(QMainWindow):
                 
         return False
 
-    # --- 핸들러 ---
-
     def keyPressEvent(self, event: QKeyEvent):
         if event.key() == Qt.Key.Key_Escape:
             self.cancel_action()
@@ -731,7 +723,7 @@ class TimetableWindow(QMainWindow):
                     return
                 self.swap_source = key
                 self.swap_candidates = self.logic.get_swap_candidates(grade, cls, day, period)
-                self.status_bar.setText(f"1단계: {clicked_teacher}. 이동할 위치(초록색 추천)를 선택하세요.")
+                self.status_bar.setText(f"1단계: {clicked_teacher}. 이동할 위치(초록색)를 선택하세요.")
             else:
                 src_g, src_c, src_d, src_p = self.swap_source
                 if key == self.swap_source:

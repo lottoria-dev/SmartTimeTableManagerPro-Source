@@ -1,6 +1,7 @@
 import sys
-from PyQt6.QtWidgets import QApplication
-from PyQt6.QtGui import QFont, QIcon
+# [PySide6] 임포트 변경
+from PySide6.QtWidgets import QApplication
+from PySide6.QtGui import QFont, QIcon
 
 from gui_pyqt import TimetableWindow
 import config
