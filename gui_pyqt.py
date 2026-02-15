@@ -1,30 +1,28 @@
 import sys
 import os
-import re  # 정규표현식 사용을 위해 추가
-from datetime import datetime # 날짜/시간 생성을 위해 추가
+import re  
+from datetime import datetime 
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
     QPushButton, QLabel, QFrame, QScrollArea, QGridLayout, 
-    QComboBox, QMessageBox, QFileDialog, QSplitter, QTreeWidget, 
-    QTreeWidgetItem, QButtonGroup, QRadioButton, QCheckBox, QAbstractItemView,
-    QSizePolicy, QDialog, QTextEdit, QLayout
+    QComboBox, QMessageBox, QFileDialog, QSplitter, QButtonGroup, 
+    QRadioButton, QCheckBox, QAbstractItemView, QSizePolicy, 
+    QDialog, QTextEdit, QLayout
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QSize, QMimeData 
-from PyQt6.QtGui import QFont, QColor, QPalette, QIcon, QKeyEvent
+from PyQt6.QtGui import QFont, QColor, QPalette, QIcon, QKeyEvent, QCloseEvent
 
-# 기존 로직 모듈 임포트
 import config
 from logic import TimetableLogic
 from ai_mover import AIChainedMover
 
-# [분리된 모듈 임포트]
 from gui_styles import STYLE_SHEET, COLORS
-from gui_components import HelpDialog, ClickableFrame
+from gui_components import HelpDialog, ClickableFrame, LogDialog
 
 class TimetableWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Smart Timetable Manager Pro")
+        self.setWindowTitle("Smart Timetable Manager Pro v1.2.0")
         self.resize(1400, 950)
         
         self.force_light_palette()
@@ -49,6 +47,9 @@ class TimetableWindow(QMainWindow):
         
         # 셀 위젯 관리 맵
         self.cell_widget_map = {}
+        
+        # [v1.2.0] 로그 다이얼로그 초기화
+        self.log_dialog = LogDialog(self)
 
         self.init_ui()
 
@@ -56,7 +57,7 @@ class TimetableWindow(QMainWindow):
         """시스템 다크모드를 무시하고 밝은 색상 테마를 강제 적용"""
         palette = QPalette()
         palette.setColor(QPalette.ColorRole.Window, QColor(255, 255, 255))
-        palette.setColor(QPalette.ColorRole.WindowText, QColor(31, 41, 55)) # #1f2937
+        palette.setColor(QPalette.ColorRole.WindowText, QColor(31, 41, 55))
         palette.setColor(QPalette.ColorRole.Base, QColor(255, 255, 255))
         palette.setColor(QPalette.ColorRole.AlternateBase, QColor(249, 250, 251))
         palette.setColor(QPalette.ColorRole.ToolTipBase, QColor(255, 255, 255))
@@ -73,25 +74,29 @@ class TimetableWindow(QMainWindow):
     def init_ui(self):
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
+        
+        # [v1.2.0] 여백 최소화 (5 -> 2, Spacing 10 -> 5)
         main_layout = QVBoxLayout(central_widget)
-        main_layout.setContentsMargins(5, 5, 5, 5)
-        main_layout.setSpacing(10)
+        main_layout.setContentsMargins(2, 2, 2, 2)
+        main_layout.setSpacing(5)
 
         # 1. 상단 컨트롤 패널 (Card)
         top_panel = QFrame()
         top_panel.setObjectName("Card")
         top_layout = QHBoxLayout(top_panel)
-        top_layout.setContentsMargins(15, 15, 15, 15)
+        top_layout.setContentsMargins(10, 8, 10, 8)
+        top_layout.setSpacing(10)
 
         # [좌측] 버튼 그룹
         btn_group_layout = QHBoxLayout()
+        btn_group_layout.setSpacing(5)
+        
         self.btn_load = QPushButton("📂 불러오기")
         self.btn_load.clicked.connect(self.load_csv)
         self.btn_save = QPushButton("💾 저장")
         self.btn_save.clicked.connect(self.save_csv)
         self.btn_save.setObjectName("SuccessBtn")
         
-        # [신규 추가] 복사 버튼
         self.btn_copy = QPushButton("📋 복사")
         self.btn_copy.clicked.connect(self.copy_to_clipboard)
         self.btn_copy.setObjectName("InfoBtn")
@@ -104,7 +109,7 @@ class TimetableWindow(QMainWindow):
         
         btn_group_layout.addWidget(self.btn_load)
         btn_group_layout.addWidget(self.btn_save)
-        btn_group_layout.addWidget(self.btn_copy) # 복사 버튼 배치
+        btn_group_layout.addWidget(self.btn_copy) 
         btn_group_layout.addWidget(self.btn_undo)
         btn_group_layout.addWidget(self.btn_cancel)
         
@@ -125,8 +130,8 @@ class TimetableWindow(QMainWindow):
             ("👁️ 조회모드", "VIEW", False),
             ("🔄 맞교환모드", "SWAP", False),
             ("🛠️ 보강모드", "COVER", False),
-            ("🔗 연쇄 이동 모드", "CHAIN", False),
-            ("🤖 AI 자동 모드", "CHAIN", True)
+            ("🔗 연쇄모드", "CHAIN", False),
+            ("🤖 AI자동", "CHAIN", True)
         ]
         
         for text, val, use_ai in modes:
@@ -163,16 +168,17 @@ class TimetableWindow(QMainWindow):
         self.context_layout.addWidget(self.cover_widget)
 
         top_layout.addLayout(btn_group_layout)
-        top_layout.addSpacing(15)
         top_layout.addWidget(line1)
-        top_layout.addSpacing(15)
         top_layout.addLayout(mode_group_layout)
-        top_layout.addSpacing(15)
         top_layout.addWidget(line2)
-        top_layout.addSpacing(15)
         top_layout.addWidget(self.context_stack)
         top_layout.addStretch()
         
+        # [v1.2.0] 로그 버튼 추가
+        btn_log = QPushButton("📜 내역")
+        btn_log.clicked.connect(self.show_log_dialog)
+        top_layout.addWidget(btn_log)
+
         btn_reset = QPushButton("초기화")
         btn_reset.clicked.connect(self.reset_all)
         top_layout.addWidget(btn_reset)
@@ -183,51 +189,9 @@ class TimetableWindow(QMainWindow):
 
         main_layout.addWidget(top_panel)
 
-        # 2. 메인 콘텐츠 (Splitter)
-        self.splitter = QSplitter(Qt.Orientation.Vertical)
+        # 2. 메인 콘텐츠 (Splitter 제거 -> 단일 Grid Panel)
+        # [v1.2.0] 로그창을 분리했으므로 Splitter 제거하고 Grid만 남김
         
-        # 로그 창
-        self.log_group = QFrame()
-        self.log_group.setObjectName("Card")
-        log_layout = QVBoxLayout(self.log_group)
-        log_layout.setContentsMargins(0, 0, 0, 0)
-        
-        # 로그창 헤더에 접기/펼치기 버튼 추가를 위한 컨테이너 구성
-        log_header_container = QWidget()
-        log_header_container.setFixedHeight(40)
-        log_header_container.setStyleSheet("background-color: #f9fafb; border-bottom: 1px solid #e5e7eb; border-top-left-radius: 8px; border-top-right-radius: 8px;")
-        header_layout = QHBoxLayout(log_header_container)
-        header_layout.setContentsMargins(10, 0, 10, 0)
-        
-        lbl_title = QLabel("📋 변경 내역")
-        lbl_title.setStyleSheet("font-weight: bold; color: #1f2937; border: none;")
-        
-        self.btn_toggle_log = QPushButton("접기 ▲")
-        self.btn_toggle_log.setFixedSize(80, 24)
-        self.btn_toggle_log.setStyleSheet("""
-            QPushButton { background-color: white; border: 1px solid #d1d5db; border-radius: 4px; font-size: 11px; }
-            QPushButton:hover { background-color: #f3f4f6; }
-        """)
-        self.btn_toggle_log.clicked.connect(self.toggle_log_view)
-
-        header_layout.addWidget(lbl_title)
-        header_layout.addStretch()
-        header_layout.addWidget(self.btn_toggle_log)
-        
-        log_layout.addWidget(log_header_container)
-
-        # 로그 내용 박스 (트리 위젯 포함) - 접기/펼치기 대상
-        self.log_content_box = QWidget()
-        log_content_layout = QHBoxLayout(self.log_content_box)
-        self.tree_left = self.create_log_tree()
-        self.tree_right = self.create_log_tree()
-        log_content_layout.addWidget(self.tree_left)
-        log_content_layout.addWidget(self.tree_right)
-        log_layout.addWidget(self.log_content_box)
-        
-        self.splitter.addWidget(self.log_group)
-
-        # 그리드 창
         grid_group = QFrame()
         grid_group.setObjectName("Card")
         grid_group_layout = QVBoxLayout(grid_group)
@@ -236,6 +200,7 @@ class TimetableWindow(QMainWindow):
         option_bar = QFrame()
         option_bar.setStyleSheet("background-color: #f9fafb; border-bottom: 1px solid #e5e7eb;")
         option_layout = QHBoxLayout(option_bar)
+        option_layout.setContentsMargins(10, 5, 10, 5) # 여백 축소
         option_layout.addWidget(QLabel("보기 방식:"))
         
         self.view_btn_group = QButtonGroup(self)
@@ -259,55 +224,46 @@ class TimetableWindow(QMainWindow):
 
         self.scroll_area = QScrollArea()
         self.scroll_area.setWidgetResizable(True)
-        # 초기 컨테이너
         self.grid_container = QWidget()
         self.grid_layout = QGridLayout(self.grid_container)
         self.scroll_area.setWidget(self.grid_container)
         
-        # [수정] status_bar가 초기화되기 전에 추가되던 오류 수정
-        grid_group_layout.addWidget(self.scroll_area) # 스크롤 영역을 레이아웃에 추가
+        grid_group_layout.addWidget(self.scroll_area)
         
         self.status_bar = QLabel(" 파일을 불러와주세요.")
-        self.status_bar.setFixedHeight(30)
-        self.status_bar.setStyleSheet("background-color: #ffffff; color: #3b82f6; font-weight: bold; padding-left: 10px;")
+        self.status_bar.setFixedHeight(24) # 높이 축소
+        self.status_bar.setStyleSheet("background-color: #ffffff; color: #3b82f6; font-weight: bold; padding-left: 10px; font-size: 11px;")
         grid_group_layout.addWidget(self.status_bar)
 
-        self.splitter.addWidget(grid_group)
-        self.splitter.setStretchFactor(0, 1)
-        self.splitter.setStretchFactor(1, 4)
-        main_layout.addWidget(self.splitter)
+        main_layout.addWidget(grid_group)
 
-    def create_log_tree(self):
-        tree = QTreeWidget()
-        tree.setHeaderLabels(["구분", "학반", "내용"])
-        tree.header().resizeSection(0, 60)
-        tree.header().resizeSection(1, 70)
-        tree.setIndentation(0)
-        tree.setAlternatingRowColors(True)
-        tree.setStyleSheet("color: #1f2937;")
-        return tree
-    
-    # 로그 창 접기/펼치기 슬롯 함수
-    def toggle_log_view(self):
-        visible = self.log_content_box.isVisible()
-        self.log_content_box.setVisible(not visible)
-        
-        if visible: # 현재 보임 -> 숨김 (접기)
-            self.btn_toggle_log.setText("펼치기 ▼")
-            self.log_group.setMaximumHeight(45) # 헤더 높이만큼 고정하여 공간 확보 방지
+    # [v1.2.0] 종료 시 저장 확인 로직
+    def closeEvent(self, event: QCloseEvent):
+        if self.logic.is_modified:
+            reply = QMessageBox.question(
+                self, "종료 확인",
+                "변경된 내용이 저장되지 않았습니다.\n저장하고 종료하시겠습니까?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No | QMessageBox.StandardButton.Cancel
+            )
             
-            # Splitter 크기 재조정 (로그창 최소화, 나머지 그리드 확장)
-            total_height = self.splitter.height()
-            # 45px은 헤더 높이 + 보더 여유분
-            self.splitter.setSizes([45, total_height - 45])
-            
-        else: # 현재 숨김 -> 보임 (펼치기)
-            self.btn_toggle_log.setText("접기 ▲")
-            self.log_group.setMaximumHeight(16777215) # 최대 높이 제한 해제
-            
-            # 비율 복구 (예: 로그 2 : 그리드 8)
-            total_height = self.splitter.height()
-            self.splitter.setSizes([int(total_height * 0.2), int(total_height * 0.8)])
+            if reply == QMessageBox.StandardButton.Yes:
+                self.save_csv()
+                # 저장 취소 시 종료도 취소
+                if self.logic.is_modified: 
+                    event.ignore()
+                    return
+                event.accept()
+            elif reply == QMessageBox.StandardButton.No:
+                event.accept()
+            else:
+                event.ignore()
+        else:
+            event.accept()
+
+    def show_log_dialog(self):
+        self.log_dialog.show()
+        self.log_dialog.raise_()
+        self.log_dialog.activateWindow()
 
     # --- 기능 구현 ---
     def show_help(self):
@@ -319,7 +275,7 @@ class TimetableWindow(QMainWindow):
         success, msg = self.logic.import_school_csv(file_path)
         if success:
             self.status_bar.setText(f"✅ {msg}")
-            self.status_bar.setStyleSheet("color: #10b981; font-weight: bold; padding-left: 10px;")
+            self.status_bar.setStyleSheet("color: #10b981; font-weight: bold; padding-left: 10px; font-size: 11px;")
             self.view_mode = "ALL_WEEK"
             self.refresh_selectors()
             self.refresh_grid()
@@ -330,7 +286,6 @@ class TimetableWindow(QMainWindow):
     def save_csv(self):
         if not self.logic.schedule: return
         
-        # 현재 날짜와 시간을 이용해 파일명 생성
         current_time = datetime.now().strftime("%y%m%d%H%M%S")
         default_filename = f"timetable-{current_time}.csv"
         
@@ -343,7 +298,6 @@ class TimetableWindow(QMainWindow):
         else:
             QMessageBox.critical(self, "오류", msg)
 
-    # [수정] 엑셀 붙여넣기 시 1-1이 날짜로 변환되는 문제 해결 (QMimeData + HTML 포맷 사용)
     def copy_to_clipboard(self):
         if not self.logic.schedule:
             self.status_bar.setText("⚠️ 복사할 데이터가 없습니다.")
@@ -352,16 +306,13 @@ class TimetableWindow(QMainWindow):
         headers = []
         data_rows = []
 
-        # 1. 데이터 수집 단계 (모드별 분기)
         if self.view_mode == "ALL_WEEK":
-            # 헤더
             headers = ["학반"]
             for day in config.DAYS:
                 limit = config.PERIODS_PER_DAY[day]
                 for p in range(1, limit + 1):
                     headers.append(f"{day}{p}")
             
-            # 데이터
             classes = self.logic.get_all_sorted_classes()
             for g, c in classes:
                 row_items = [f"{g}-{c}"]
@@ -433,27 +384,20 @@ class TimetableWindow(QMainWindow):
                     row_items.append(content)
                 data_rows.append(row_items)
 
-        # 2. 포맷 생성 단계 (TSV & HTML)
-        
-        # TSV (Plain Text용: 메모장 등)
         tsv_lines = ["\t".join(headers)]
         for row in data_rows:
             tsv_lines.append("\t".join(row))
         full_tsv = "\n".join(tsv_lines)
 
-        # HTML (Rich Text용: 엑셀 등)
-        # mso-number-format:"\@" 스타일을 적용하여 엑셀이 데이터를 텍스트로 인식하게 함
         html_parts = []
         html_parts.append('<meta charset="utf-8">') 
         html_parts.append('<table border="1" style="border-collapse: collapse;">')
         
-        # Header
         html_parts.append('<thead><tr>')
         for h in headers:
             html_parts.append(f'<th style="background-color: #f0f0f0; padding: 5px;">{h}</th>')
         html_parts.append('</tr></thead>')
         
-        # Body
         html_parts.append('<tbody>')
         for row in data_rows:
             html_parts.append('<tr>')
@@ -465,15 +409,14 @@ class TimetableWindow(QMainWindow):
         
         full_html = "".join(html_parts)
 
-        # 3. 클립보드 설정 (MIME 타입별 데이터 세팅)
         mime_data = QMimeData()
-        mime_data.setText(full_tsv) # 텍스트 에디터용
-        mime_data.setHtml(full_html) # 엑셀/워드용
+        mime_data.setText(full_tsv) 
+        mime_data.setHtml(full_html) 
 
         QApplication.clipboard().setMimeData(mime_data)
         
         self.status_bar.setText("📋 복사 완료 (엑셀 날짜 변환 방지 적용)")
-        self.status_bar.setStyleSheet("color: #6366f1; font-weight: bold; padding-left: 10px;")
+        self.status_bar.setStyleSheet("color: #6366f1; font-weight: bold; padding-left: 10px; font-size: 11px;")
 
     def undo_action(self):
         self.cancel_action()
@@ -516,15 +459,15 @@ class TimetableWindow(QMainWindow):
         self.use_ai_mode = btn.property("use_ai")
         self.cover_widget.setVisible(False)
         msg = ""
-        if self.work_mode == "VIEW": msg = "[조회 모드] 수업 클릭 시 교사 일정 강조. 우클릭 시 잠금."
-        elif self.work_mode == "SWAP": msg = "[맞교환 모드] 바꿀 두 수업을 순서대로 클릭."
+        if self.work_mode == "VIEW": msg = "[조회 모드] 수업 클릭 시 교사의 모든 수업 강조.(우클릭 시 잠금)"
+        elif self.work_mode == "SWAP": msg = "[맞교환 모드] 바꿀 두 수업을 순서대로 클릭.(교환 추천 시간은 초록색)"
         elif self.work_mode == "COVER":
             msg = "[보강 모드] 보강할 수업 선택."
             self.cover_widget.setVisible(True)
         elif self.work_mode == "CHAIN":
             msg = "[AI 자동 모드] 이동 시 연쇄 충돌 자동 해결." if self.use_ai_mode else "[연쇄 이동 모드] 수동으로 밀어내기 이동."
         self.status_bar.setText(msg)
-        self.status_bar.setStyleSheet(f"color: {COLORS['accent']}; font-weight: bold; padding-left: 10px;")
+        self.status_bar.setStyleSheet(f"color: {COLORS['accent']}; font-weight: bold; padding-left: 10px; font-size: 11px;")
         self.update_cell_visuals()
 
     def on_view_change(self, btn):
@@ -550,7 +493,6 @@ class TimetableWindow(QMainWindow):
             classes = self.logic.get_all_sorted_classes()
             self.combo_sel.addItems([f"{g}-{c}" for g, c in classes])
             
-            # [수정] 아이템 폭 계산하여 자동 조절
             self.adjust_combo_width(self.combo_sel)
             
             self.combo_sel.currentTextChanged.connect(self.refresh_grid)
@@ -562,7 +504,6 @@ class TimetableWindow(QMainWindow):
             teachers = self.logic.get_all_teachers_sorted()
             self.combo_sel.addItems(teachers)
             
-            # [수정] 아이템 폭 계산하여 자동 조절
             self.adjust_combo_width(self.combo_sel)
             
             self.combo_sel.currentTextChanged.connect(self.refresh_grid)
@@ -571,7 +512,6 @@ class TimetableWindow(QMainWindow):
             self.selector_layout.addWidget(QLabel("교과:"))
             self.combo_sel = QComboBox()
             
-            # 1. 모든 교과목 수집
             all_subjects = set()
             if self.logic.schedule:
                 for g_data in self.logic.schedule.values():
@@ -581,11 +521,6 @@ class TimetableWindow(QMainWindow):
                                 if info and 'subject' in info:
                                     all_subjects.add(info['subject'])
             
-            # 2. 교과목 그룹화 (대표 교과 선정)
-            # 정렬 기준: 
-            # (1) 순수 한글(알파벳/숫자 미포함) 우선
-            # (2) 길이가 짧은 순
-            # (3) 가나다 순
             def subject_sort_key(s):
                 has_alnum = any(c.isascii() and c.isalnum() for c in s)
                 return (has_alnum, len(s), s)
@@ -596,14 +531,12 @@ class TimetableWindow(QMainWindow):
             for subj in sorted_subjects:
                 is_covered = False
                 for rep in representatives:
-                    # 이미 등록된 대표 교과와 유사하면(포함되거나 변형된 형태면) 추가하지 않음
                     if self.is_subject_similar(rep, subj):
                         is_covered = True
                         break
                 if not is_covered:
                     representatives.append(subj)
             
-            # 3. 대표 교과만 메뉴에 추가 (가나다순 정렬)
             representatives.sort()
             self.combo_sel.addItems(representatives)
 
@@ -612,29 +545,24 @@ class TimetableWindow(QMainWindow):
             self.selector_layout.addWidget(self.combo_sel)
 
     def adjust_combo_width(self, combo):
-        """콤보박스 아이템의 텍스트 길이에 맞춰 폭을 자동 조절"""
         width = 0
         fm = combo.fontMetrics()
         for i in range(combo.count()):
             w = fm.horizontalAdvance(combo.itemText(i))
             if w > width:
                 width = w
-        # 텍스트 폭 + 아이콘/패딩 여유분(40px)
         combo.setMinimumWidth(width + 40)
 
     def refresh_grid(self, _=None):
-        """GridLayout 정렬 문제 해결 (VBox + HBox + Stretch 사용)"""
         old_widget = self.scroll_area.widget()
         if old_widget: old_widget.deleteLater()
             
         self.grid_container = QWidget()
         
-        # 최상위 VBox (세로 정렬)
         main_vbox = QVBoxLayout(self.grid_container)
         main_vbox.setContentsMargins(0, 0, 0, 0)
         main_vbox.setSpacing(0)
         
-        # 가로 정렬을 위한 HBox (Grid + Stretch)
         h_box = QHBoxLayout()
         h_box.setContentsMargins(0, 0, 0, 0)
         h_box.setSpacing(0)
@@ -644,10 +572,10 @@ class TimetableWindow(QMainWindow):
         self.grid_layout.setContentsMargins(1, 1, 1, 1)
         
         h_box.addLayout(self.grid_layout)
-        h_box.addStretch(1) # 우측 여백 확보 (컨텐츠가 적을 때 늘어나지 않도록)
+        h_box.addStretch(1) 
         
         main_vbox.addLayout(h_box)
-        main_vbox.addStretch(1) # 하단 여백 확보
+        main_vbox.addStretch(1) 
         
         self.scroll_area.setWidget(self.grid_container)
         
@@ -683,7 +611,7 @@ class TimetableWindow(QMainWindow):
         bg_color = COLORS["cell_default"]
         border_color = "#e5e7eb"
         border_width = 1
-        text_color = "#1f2937" # 기본 검정색
+        text_color = "#1f2937" 
 
         if self.logic.is_locked(grade, cls, day, period):
             bg_color = COLORS["cell_locked"]
@@ -691,12 +619,11 @@ class TimetableWindow(QMainWindow):
         if self.logic.is_changed(grade, cls, day, period):
             bg_color = COLORS["cell_changed"]
 
-        # [복원] 중복 교사(Conflict) 체크: 같은 시간대에 해당 교사가 2개 이상의 수업을 하는지 확인
         if teacher_name:
             t_sched = self.logic.teachers_schedule.get(teacher_name, {})
             if day in t_sched and period in t_sched[day]:
                 if len(t_sched[day][period]) > 1:
-                    bg_color = COLORS["cell_conflict"] # 상시 붉은 배경
+                    bg_color = COLORS["cell_conflict"] 
 
         if self.swap_source == key:
             bg_color = COLORS["cell_selected"]
@@ -725,14 +652,12 @@ class TimetableWindow(QMainWindow):
                 bg_color = COLORS["cell_chain_src"]
 
         if teacher_name and teacher_name in self.highlighted_teachers:
-             # 중복 배경색도 선택 시에는 하이라이트 색으로 덮어씀
              if bg_color in [COLORS["cell_default"], COLORS["cell_locked"], COLORS["cell_changed"], COLORS["cell_conflict"]]:
                  bg_color = self.highlighted_teachers[teacher_name]
                  if bg_color == COLORS["cell_selected"]: border_color = COLORS["accent"]
 
-        # [수정] 3연강 이상 교사는 보라색 글자로 표시
         if teacher_name and self.is_consecutive_3(teacher_name, day, period):
-             text_color = "#9333ea" # 보라색
+             text_color = "#9333ea" 
 
         cell.set_content(main_text, sub_text, bg_color, border_color, border_width, text_color)
 
@@ -740,8 +665,8 @@ class TimetableWindow(QMainWindow):
         lbl = QLabel(text)
         lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lbl.setStyleSheet("background-color: #e5e7eb; font-weight: bold; border: 1px solid #d1d5db; color: #1f2937;")
-        # [수정] 헤더 높이 축소 (35 -> 30)
-        lbl.setMinimumHeight(30)
+        # [v1.2.0] 헤더 높이 축소 (30 -> 26)
+        lbl.setMinimumHeight(26)
         if len(text) > 4: lbl.setMinimumWidth(80) 
         else: lbl.setMinimumWidth(40)
         self.grid_layout.addWidget(lbl, r, c, rowspan, colspan)
@@ -758,26 +683,16 @@ class TimetableWindow(QMainWindow):
     def is_consecutive_3(self, teacher, day, period):
         return self.logic.check_consecutive_classes(teacher, day, period)
     
-    # 유사 교과 판별 로직
     def is_subject_similar(self, target, selected):
-        """
-        두 교과명이 유사한지 판단합니다.
-        1. 정확히 일치
-        2. 한쪽이 다른 쪽에 포함됨 (예: '도덕' in '도덕A')
-        3. 첫 글자가 같고, 한쪽에 영문/숫자가 포함된 경우 (약어 패턴, 예: '도덕' vs '도A')
-        """
         if not target or not selected: return False
         
-        # 공백 제거 후 비교
         t = target.replace(" ", "")
         s = selected.replace(" ", "")
         
         if t == s: return True
         if s in t or t in s: return True
         
-        # 약어 패턴 확인: 첫 글자가 같고, 영문/숫자가 포함되어 있으면 유사한 것으로 간주
         if t[0] == s[0]:
-            # 영문 또는 숫자가 포함되어 있는지 확인
             has_extra_t = any(c.isascii() and c.isalnum() for c in t)
             has_extra_s = any(c.isascii() and c.isalnum() for c in s)
             if has_extra_t or has_extra_s:
@@ -787,7 +702,6 @@ class TimetableWindow(QMainWindow):
 
     # --- 핸들러 ---
 
-    # [수정] 키보드 이벤트를 통한 ESC 단축키 처리 추가
     def keyPressEvent(self, event: QKeyEvent):
         if event.key() == Qt.Key.Key_Escape:
             self.cancel_action()
@@ -817,7 +731,7 @@ class TimetableWindow(QMainWindow):
                     return
                 self.swap_source = key
                 self.swap_candidates = self.logic.get_swap_candidates(grade, cls, day, period)
-                self.status_bar.setText(f"1단계: {clicked_teacher}. 이동할 위치(초록색)를 선택하세요.")
+                self.status_bar.setText(f"1단계: {clicked_teacher}. 이동할 위치(초록색 추천)를 선택하세요.")
             else:
                 src_g, src_c, src_d, src_p = self.swap_source
                 if key == self.swap_source:
@@ -926,23 +840,13 @@ class TimetableWindow(QMainWindow):
         self.update_cell_visuals()
 
     def update_log_view(self):
-        self.tree_left.clear()
-        self.tree_right.clear()
-        
+        # [v1.2.0] 로그 다이얼로그 업데이트
         if hasattr(self.logic, 'get_diff_list'):
             logs = self.logic.get_diff_list()
         else:
             logs = self.logic.change_logs
-            
-        mid = (len(logs) + 1) // 2
-        for i, log in enumerate(logs):
-            if isinstance(log, dict):
-                item = QTreeWidgetItem([str(log.get('type','')), str(log.get('class','')), str(log.get('desc',''))])
-                if i < mid: self.tree_left.addTopLevelItem(item)
-                else: self.tree_right.addTopLevelItem(item)
-                if i == len(logs) - 1:
-                    target = self.tree_right if i >= mid else self.tree_left
-                    target.scrollToItem(item)
+        
+        self.log_dialog.update_logs(logs)
 
     # --- 렌더링 함수 ---
     
@@ -950,9 +854,8 @@ class TimetableWindow(QMainWindow):
         self.add_header("학반", 0, 0)
         self.grid_layout.setColumnMinimumWidth(0, 80)
         
-        # [수정] 학급 수를 먼저 계산하여 세로선(요일 구분선)의 길이를 동적으로 지정
         classes = self.logic.get_all_sorted_classes()
-        total_rows = len(classes) + 1  # 헤더(1줄) + 학급 데이터 줄 수
+        total_rows = len(classes) + 1  
 
         col = 1
         for day in config.DAYS:
@@ -964,7 +867,6 @@ class TimetableWindow(QMainWindow):
                 lbl = QLabel()
                 lbl.setFixedWidth(5)
                 lbl.setStyleSheet("background-color: #d1d5db;")
-                # [수정] 불필요한 스크롤 방지를 위해 rowspan을 전체 행 개수에 맞춤 (기존 1000 -> total_rows)
                 self.grid_layout.addWidget(lbl, 0, col, total_rows, 1)
                 col += 1
         
@@ -988,8 +890,6 @@ class TimetableWindow(QMainWindow):
         limit = config.PERIODS_PER_DAY[target_day]
         for p in range(1, limit + 1):
             self.add_header(f"{p}교시", 0, p)
-            # [수정] 강제 확장 제거 (내용물에 맞게 표시)
-            # self.grid_layout.setColumnStretch(p, 1) 
         classes = self.logic.get_all_sorted_classes()
         for r, (g, c) in enumerate(classes):
             row = r + 1
@@ -1006,8 +906,6 @@ class TimetableWindow(QMainWindow):
         self.add_header("교시", 0, 0)
         for i, day in enumerate(config.DAYS):
             self.add_header(day, 0, i+1)
-            # [수정] 강제 확장 제거
-            # self.grid_layout.setColumnStretch(i+1, 1)
             self.grid_layout.setColumnMinimumWidth(i+1, 120)
         for p in range(1, config.MAX_PERIODS + 1):
             self.add_header(f"{p}교시", p, 0)
@@ -1022,8 +920,6 @@ class TimetableWindow(QMainWindow):
         self.add_header("교시", 0, 0)
         for i, day in enumerate(config.DAYS):
             self.add_header(day, 0, i+1)
-            # [수정] 강제 확장 제거
-            # self.grid_layout.setColumnStretch(i+1, 1)
             self.grid_layout.setColumnMinimumWidth(i+1, 120)
         for p in range(1, config.MAX_PERIODS + 1):
             self.add_header(f"{p}교시", p, 0)
@@ -1051,8 +947,6 @@ class TimetableWindow(QMainWindow):
         self.add_header("교시", 0, 0)
         for i, day in enumerate(config.DAYS):
             self.add_header(day, 0, i+1)
-            # [수정] 강제 확장 제거
-            # self.grid_layout.setColumnStretch(i+1, 1)
             self.grid_layout.setColumnMinimumWidth(i+1, 120)
 
         for p in range(1, config.MAX_PERIODS + 1):
@@ -1065,7 +959,6 @@ class TimetableWindow(QMainWindow):
                         day_sched = self.logic.schedule[str(g)][str(c)].get(day, {})
                         info = day_sched.get(p)
                         if info:
-                             # [수정] 유사 교과명을 체크하는 로직 적용
                             target_subject = info.get('subject')
                             if self.is_subject_similar(target_subject, subj_name):
                                 matches.append(f"{g}-{c}({info['teacher']})")

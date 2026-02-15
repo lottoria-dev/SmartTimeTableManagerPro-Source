@@ -24,6 +24,9 @@ class TimetableLogic:
 
         # CSV 관리자 인스턴스 생성
         self.csv_manager = CSVManager()
+
+        # [v1.2.0] 변경 사항 추적 플래그
+        self.is_modified = False
     
     def reset_data(self):
         """데이터 완전 삭제 (파일 로드 전 상태)"""
@@ -34,14 +37,21 @@ class TimetableLogic:
         self.change_logs = []
         self.history_stack = []
         self.locked_cells.clear()
+        self.is_modified = False
 
     def import_school_csv(self, file_path):
         """CSV 파일을 불러옵니다. (CSVManager 위임)"""
-        return self.csv_manager.load_csv(file_path, self)
+        result, msg = self.csv_manager.load_csv(file_path, self)
+        if result:
+            self.is_modified = False # 불러온 직후는 변경 없음 상태
+        return result, msg
     
     def export_csv(self, file_path):
         """현재 상태를 CSV로 저장합니다. (CSVManager 위임)"""
-        return self.csv_manager.save_csv(file_path, self)
+        result, msg = self.csv_manager.save_csv(file_path, self)
+        if result:
+            self.is_modified = False # 저장 완료 시 변경 없음 상태로 초기화
+        return result, msg
 
     def restore_original_state(self):
         """CSV 로드 직후 상태로 복구"""
@@ -66,6 +76,8 @@ class TimetableLogic:
                         if teacher and self._is_valid_teacher_name(teacher):
                             self.all_teachers.add(teacher)
                             self.teachers_schedule[teacher][day][period].add((grade, cls))
+        
+        self.is_modified = False
         return True
 
     def _set_original_state(self):
@@ -79,7 +91,8 @@ class TimetableLogic:
             'teachers_schedule': copy.deepcopy(self.teachers_schedule),
             'all_teachers': copy.deepcopy(self.all_teachers),
             'change_logs': copy.deepcopy(self.change_logs),
-            'locked_cells': copy.deepcopy(self.locked_cells)
+            'locked_cells': copy.deepcopy(self.locked_cells),
+            'is_modified': self.is_modified
         }
         self.history_stack.append(snapshot)
         if len(self.history_stack) > 100:
@@ -96,6 +109,7 @@ class TimetableLogic:
         self.all_teachers = last_state['all_teachers']
         self.change_logs = last_state['change_logs']
         self.locked_cells = last_state['locked_cells']
+        self.is_modified = last_state['is_modified']
         return True
 
     def is_changed(self, grade, cls, day, period):
@@ -309,6 +323,8 @@ class TimetableLogic:
         if teacher and self._is_valid_teacher_name(teacher):
             self.teachers_schedule[teacher][day][period].add((grade, cls))
             self.all_teachers.add(teacher)
+        
+        self.is_modified = True
 
     def remove_class(self, grade, cls, day, period):
         grade, cls = str(grade), str(cls)
@@ -323,6 +339,7 @@ class TimetableLogic:
                         del self.teachers_schedule[teacher][day][period]
             
             del self.schedule[grade][cls][day][period]
+            self.is_modified = True
         return info
 
     def is_teacher_busy(self, teacher, day, period, ignore_grade=None, ignore_class=None):
@@ -439,6 +456,8 @@ class TimetableLogic:
         
         if info1: self.add_class(grade, cls, d2, p2, info1['subject'], info1['teacher'])
         if info2: self.add_class(grade, cls, d1, p1, info2['subject'], info2['teacher'])
+        
+        self.is_modified = True
 
     def update_teacher(self, grade, cls, day, period, new_teacher):
         self.save_snapshot()
@@ -460,6 +479,8 @@ class TimetableLogic:
 
         self.remove_class(grade, cls, day, period)
         self.add_class(grade, cls, day, period, subject, new_teacher)
+        
+        self.is_modified = True
 
     def get_all_sorted_classes(self):
         classes = []

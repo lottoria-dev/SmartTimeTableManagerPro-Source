@@ -47,7 +47,7 @@ QPushButton#ModeBtn {
     color: #4b5563;
     border: 1px solid #d1d5db;
     border-radius: 8px;
-    padding: 10px 16px;
+    padding: 8px 14px; /* [v1.2.0] 패딩 축소 */
     font-weight: bold;
     font-size: 11px;
     text-align: center;
@@ -67,7 +67,7 @@ QPushButton {
     background-color: #ffffff;
     border: 1px solid #d1d5db;
     border-radius: 6px;
-    padding: 6px 12px;
+    padding: 5px 10px; /* [v1.2.0] 패딩 축소 */
     color: #374151;
     font-weight: bold;
 }
@@ -122,7 +122,7 @@ QScrollArea > QWidget > QWidget {
     background-color: #ffffff;
 }
 
-/* 트리 위젯 (로그창) */
+/* 트리 위젯 (로그창 - 다이얼로그용) */
 QTreeWidget {
     border: 1px solid #e5e7eb;
     border-radius: 6px;

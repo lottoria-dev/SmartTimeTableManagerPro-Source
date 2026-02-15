@@ -61,8 +61,19 @@ class AIChainedMover:
                 if task.get('target_day') and task.get('target_period'):
                     t_day, t_period = task['target_day'], task['target_period']
                     
+                    # [추가] 1. 목표 위치가 잠겨있는지 확인 (덮어쓰기/밀어내기 방지)
+                    if self.logic.is_locked(g, c, t_day, t_period):
+                        raise Exception(f"{g}-{c} {t_day}{t_period} 교시는 잠겨있어 이동할 수 없습니다.")
+
                     if task.get('source_day'):
                         self.logic.remove_class(g, c, task['source_day'], task['source_period'])
+
+                    # [추가] 2. 해당 시간대에 교사가 다른 반 수업이 있는데, 그 수업이 잠겨있는지 확인 (충돌 해결 불가 방지)
+                    # remove_class 이후 시점이므로, get_busy_info는 '방금 이동해 온 수업'을 제외한 '기존 수업'들만 반환함
+                    busy_locations = self.logic.get_busy_info(teacher, t_day, t_period)
+                    for other_g, other_c in busy_locations:
+                        if self.logic.is_locked(other_g, other_c, t_day, t_period):
+                             raise Exception(f"{teacher} 교사는 {other_g}-{other_c} {t_day}{t_period} 수업이 고정(잠금)되어 있어 중복 배정할 수 없습니다.")
 
                     existing_data = self.logic.schedule[g][c][t_day].get(t_period)
                     if existing_data:
@@ -79,12 +90,14 @@ class AIChainedMover:
                     # [수정] 이곳은 방금 배정되었으므로, 이번 체인 내에서 다시 밀어내기 금지
                     protected_slots.add((g, c, t_day, t_period))
                     
-                    busy_locations = self.logic.get_busy_info(teacher, t_day, t_period)
-                    if len(busy_locations) > 1:
+                    # busy_locations는 위에서 조회한 값을 재사용 가능하지만, 
+                    # 안전하게 add_class 이후 상태(사실상 동일하지만) 로직 흐름 유지
+                    if len(busy_locations) >= 1: # 이미 위에서 조회했으므로(자신 제외) 1개 이상이면 충돌임
                         for other_g, other_c in busy_locations:
                             if (str(other_g), str(other_c)) == (str(g), str(c)):
                                 continue
                             
+                            # 위에서 잠금 체크를 했으므로 여기서는 안전하게 제거 가능
                             conflict_data = self.logic.remove_class(other_g, other_c, t_day, t_period)
                             if conflict_data:
                                 queue.append({
