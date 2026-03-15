@@ -21,7 +21,7 @@ class HelpDialog(QDialog):
         
         # [수정] 개발자 정보에 lottoria 적용
         help_content = """
-<h2>📖 스마트 시간표 매니저 v1.2.1</h2>
+<h2>📖 스마트 시간표 매니저(SmartTimetableManagerPro) v1.2.1</h2>
 <hr>
 <h3>1. 기본 사용법</h3>
 <ul>
@@ -72,8 +72,8 @@ class HelpDialog(QDialog):
     - 버전: 1.2.1 (2026.02.15)<br>
     - 개발: lottoria<br>
     - 문의: trsketch@gmail.com<br>
-    - 본 프로그램은 무단 재배포 및 상업적 이용이 금지되어 있습니다.<br>
-    © Copyright 2026 lottoria. All rights reserved.
+    - 정식 배포 페이지를 제외한 곳에서 임의의 수정 및 재배포를 금지합니다.<br>
+    © Copyright 2026 lottoria-dev. All rights reserved.
 </div>
 """
         text_edit.setHtml(help_content)
