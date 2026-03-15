@@ -1,7 +1,7 @@
 ﻿===================================================
-SOFTWARE LICENSE AGREEMENT
+# SOFTWARE LICENSE AGREEMENT
 
-Product Name: Smart Timetable Manager Pro (스마트 시간표 매니저 프로)
+## Product Name: Smart Timetable Manager Pro (스마트 시간표 매니저 프로)
 Version: 1.2.0
 Copyright (c) 2026 lottoria. All rights reserved.
 
