@@ -8,7 +8,7 @@ class AIChainedMover:
         :param logic_instance: TimetableLogic 클래스의 인스턴스 (데이터 접근 및 수정용)
         """
         self.logic = logic_instance
-        self.max_steps = 80  # 연쇄 이동 제한 횟수
+        self.max_steps = 200  # 연쇄 이동 제한 횟수
 
     def try_ai_move(self, start_grade, start_cls, start_day, start_period, target_day, target_period):
         """

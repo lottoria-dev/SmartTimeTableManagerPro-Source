@@ -495,3 +495,28 @@ class TimetableLogic:
 
     def get_all_teachers_sorted(self):
         return sorted(list(self.all_teachers))
+        
+# logic.py 내부 TimetableLogic 클래스 끝부분에 추가
+    
+    def get_teacher_primary_subject(self, teacher):
+        """교사의 주 담당 교과를 추출합니다."""
+        subjects = []
+        for day in self.teachers_schedule.get(teacher, {}):
+            for p in self.teachers_schedule[teacher][day]:
+                for g, c in self.teachers_schedule[teacher][day][p]:
+                    data = self.schedule[str(g)][str(c)][day].get(p)
+                    if data and data.get('subject'):
+                        subjects.append(data['subject'])
+        if not subjects:
+            return ""
+        
+        # 배정된 횟수가 가장 많은 교과를 반환
+        from collections import Counter
+        return Counter(subjects).most_common(1)[0][0]
+
+    def get_all_teachers_sorted_by_subject(self):
+        """유사 교과(주 담당 교과)를 기준으로 교사 목록을 정렬합니다."""
+        teachers = self.get_all_teachers_sorted()
+        # 1순위: 교과명(가나다순), 2순위: 교사명(가나다순)
+        teachers.sort(key=lambda t: (self.get_teacher_primary_subject(t), t))
+        return teachers        

@@ -22,7 +22,7 @@ from gui_components import HelpDialog, ClickableFrame, LogDialog
 class TimetableWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Smart Timetable Manager Pro v1.2.0")
+        self.setWindowTitle("Smart Timetable Manager Pro v2.2.1")
         self.resize(1520, 750)
         
         self.force_light_palette()
@@ -201,7 +201,14 @@ class TimetableWindow(QMainWindow):
         
         self.view_btn_group = QButtonGroup(self)
         self.view_btn_group.buttonClicked.connect(self.on_view_change)
-        view_modes = [("주간 전체", "ALL_WEEK"), ("요일별", "ALL_DAY"), ("학급별", "SINGLE"), ("교사별", "TEACHER"), ("교과별", "SUBJECT")]
+        view_modes = [
+            ("주간 전체", "ALL_WEEK"), 
+            ("교사 전체", "ALL_TEACHER"),
+            ("요일별", "ALL_DAY"), 
+            ("학급별", "SINGLE"), 
+            ("교사별", "TEACHER"), 
+            ("교과별", "SUBJECT")
+        ]
         for text, val in view_modes:
             rb = QRadioButton(text)
             rb.setProperty("view_val", val)
@@ -214,6 +221,29 @@ class TimetableWindow(QMainWindow):
         self.selector_layout = QHBoxLayout(self.selector_stack)
         self.selector_layout.setContentsMargins(0, 0, 0, 0)
         option_layout.addWidget(self.selector_stack)
+        
+        # ----------------------------------------
+        self.chk_only_changed = QCheckBox("🔄 변경된 항목만 보기")
+        self.chk_only_changed.stateChanged.connect(self.refresh_grid)
+        
+        # CSS 스타일을 다중 줄 문자열로 적용해서 전체 테두리와 마우스 호버 효과까지 추가!
+        self.chk_only_changed.setStyleSheet("""
+            QCheckBox {
+                font-weight: bold; 
+                color: #d97706; 
+                margin-left: 15px;
+                border: 1px solid #9ca3af; /* 눈에 띄는 회색 테두리 */
+                border-radius: 5px;        /* 모서리 둥글게 */
+                padding: 4px 8px;          /* 안쪽 여백을 줘서 버튼처럼 보이게 */
+                background-color: #ffffff; /* 하얀색 배경 */
+            }
+            QCheckBox:hover {
+                background-color: #f3f4f6; /* 마우스를 올리면 살짝 짙어지는 효과 */
+            }
+        """)
+        option_layout.addWidget(self.chk_only_changed)
+        # ----------------------------------------
+        
         option_layout.addStretch()
 
         grid_group_layout.addWidget(option_bar)
@@ -339,7 +369,31 @@ class TimetableWindow(QMainWindow):
                     else:
                         row_items.append("")
                 data_rows.append(row_items)
-
+        
+        elif self.view_mode == "ALL_TEACHER":
+            headers = ["교사(주교과)"]
+            for day in config.DAYS:
+                limit = config.PERIODS_PER_DAY[day]
+                for p in range(1, limit + 1):
+                    headers.append(f"{day}{p}")
+            
+            teachers = self.logic.get_all_teachers_sorted_by_subject()
+            for teacher in teachers:
+                subj = self.logic.get_teacher_primary_subject(teacher)
+                row_items = [f"{teacher} ({subj})" if subj else teacher]
+                for day in config.DAYS:
+                    limit = config.PERIODS_PER_DAY[day]
+                    for p in range(1, limit + 1):
+                        locations = list(self.logic.teachers_schedule.get(teacher, {}).get(day, {}).get(p, set()))
+                        if locations:
+                            g, c = locations[0]
+                            data = self.logic.schedule[str(g)][str(c)][day].get(p)
+                            subj_name = data['subject'] if data else ""
+                            row_items.append(f"{g}-{c} ({subj_name})")
+                        else:
+                            row_items.append("")
+                data_rows.append(row_items)
+        
         elif self.view_mode in ["SINGLE", "TEACHER", "SUBJECT"]:
             headers = ["교시"] + config.DAYS
             target_val = self.combo_sel.currentText()
@@ -435,6 +489,8 @@ class TimetableWindow(QMainWindow):
             self.chain_floating_data = None
         self.combo_cover_teacher.clear()
         self.status_bar.setText("선택이 취소되었습니다.")
+        
+        # 이전 코드에 있던 복잡한 QTimer 분기를 다 지우고 이 한 줄만 남긴다.
         self.update_cell_visuals()
 
     def reset_all(self):
@@ -579,13 +635,112 @@ class TimetableWindow(QMainWindow):
         elif self.view_mode == "ALL_DAY": self.render_all_day()
         elif self.view_mode == "SINGLE": self.render_single()
         elif self.view_mode == "TEACHER": self.render_teacher()
+        elif self.view_mode == "ALL_TEACHER": self.render_all_teacher()
         elif self.view_mode == "SUBJECT": self.render_subject()
+
+    def get_changed_classes(self):
+        """시간표가 변경된 학급 목록을 반환합니다."""
+        changed = set()
+        if not self.logic.original_schedule: return changed
+        classes = self.logic.get_all_sorted_classes()
+        for g, c in classes:
+            for day in config.DAYS:
+                limit = config.PERIODS_PER_DAY[day]
+                for p in range(1, limit + 1):
+                    if self.logic.is_changed(g, c, day, p):
+                        changed.add((str(g), str(c)))
+        return changed
+
+    def get_changed_teachers(self):
+        """시간표가 변경된(추가/삭제된) 교사 목록을 반환합니다."""
+        changed = set()
+        if not self.logic.original_schedule: return changed
+        classes = self.logic.get_all_sorted_classes()
+        for g, c in classes:
+            for day in config.DAYS:
+                limit = config.PERIODS_PER_DAY[day]
+                for p in range(1, limit + 1):
+                    if self.logic.is_changed(g, c, day, p):
+                        # 현재 시간표에 있는 교사 추가
+                        curr = self.logic.schedule[str(g)][str(c)][day].get(p)
+                        if curr and curr.get('teacher'):
+                            changed.add(curr['teacher'])
+                        
+                        # 원본 시간표에 있었던 교사 추가 (이동해서 사라진 교사도 추적)
+                        orig_g = self.logic.original_schedule.get(str(g), {})
+                        orig_c = orig_g.get(str(c), {})
+                        orig_d = orig_c.get(day, {})
+                        orig_p = orig_d.get(p)
+                        if orig_p and orig_p.get('teacher'):
+                            changed.add(orig_p['teacher'])
+        return changed    
 
     def update_cell_visuals(self):
         for key, cell_widget in self.cell_widget_map.items():
             self._update_single_cell(cell_widget, key)
 
     def _update_single_cell(self, cell, key):
+        # [추가] 교사 전체 조회 모드 전용 초고속 시각 업데이트
+        if isinstance(key, tuple) and key[0] == "TEACHER_VIEW":
+            _, teacher_name, day, period = key
+            locations = list(self.logic.teachers_schedule.get(teacher_name, {}).get(day, {}).get(period, set()))
+            
+            bg_color = COLORS["cell_default"]
+            border_color = "#e5e7eb"
+            border_width = 1
+            text_color = "#1f2937"
+            main_text, sub_text = "", ""
+            real_key = None
+
+            # 1. 수업이 있는 경우 데이터 연동
+            if locations:
+                g, c = locations[0]
+                data = self.logic.schedule[str(g)][str(c)][day].get(period)
+                if data:
+                    main_text, sub_text = data['subject'], f"{g}-{c}"
+                    real_key = (str(g), str(c), day, period)
+                    
+                    if self.logic.is_locked(g, c, day, period):
+                        bg_color = COLORS["cell_locked"]
+                        main_text = "🔒 " + main_text
+                    if self.logic.is_changed(g, c, day, period):
+                        bg_color = COLORS["cell_changed"]
+                    if len(locations) > 1:
+                        bg_color = COLORS["cell_conflict"]
+
+            # 2. 이동/선택 모드일 때의 하이라이트 효과
+            if real_key and self.swap_source == real_key:
+                bg_color = COLORS["cell_selected"]
+                border_color, border_width = COLORS["accent"], 2
+            elif self.work_mode == "SWAP" and self.swap_source:
+                src_g, src_c, _, _ = self.swap_source
+                if real_key and (str(g), str(c)) == (src_g, src_c) and (day, period) in self.swap_candidates:
+                    bg_color = COLORS["cell_target"]
+                    border_color = "#10b981"
+            elif self.work_mode == "CHAIN" and self.chain_floating_data:
+                orig_g, orig_c = self.chain_floating_data['origin_gc']
+                orig_d, orig_p = self.chain_floating_data['origin_time']
+                floater = self.chain_floating_data['teacher']
+                
+                if day == orig_d and period == orig_p and teacher_name == floater:
+                    bg_color = COLORS["cell_chain_tgt"] # 이탈한 자리
+                elif teacher_name == floater:
+                    if not self.logic.is_locked(orig_g, orig_c, day, period):
+                        bg_color = COLORS["cell_target"] # 들어갈 수 있는 타겟 자리
+                        border_color = "#10b981"
+
+            # 3. 교사 강조 및 3연강 표시
+            if teacher_name and teacher_name in self.highlighted_teachers:
+                if bg_color in [COLORS["cell_default"], COLORS["cell_locked"], COLORS["cell_changed"], COLORS["cell_conflict"]]:
+                    bg_color = self.highlighted_teachers[teacher_name]
+                    if bg_color == COLORS["cell_selected"]: border_color = COLORS["accent"]
+
+            if teacher_name and self.logic.check_consecutive_classes(teacher_name, day, period):
+                text_color = "#9333ea" 
+
+            # 내용물만 쏙 교체 (위젯 파괴 안 함)
+            cell.set_content(main_text, sub_text, bg_color, border_color, border_width, text_color)
+            return
         grade, cls, day, period = key
         grade, cls = str(grade), str(cls)
         period = int(period)
@@ -595,7 +750,7 @@ class TimetableWindow(QMainWindow):
         teacher_name = data['teacher'] if data else None
 
         if data:
-            if self.view_mode == "TEACHER":
+            if self.view_mode in ["TEACHER", "ALL_TEACHER"]:
                 main_text, sub_text = data['subject'], f"{grade}-{cls}"
             elif self.view_mode == "ALL_DAY":
                 main_text = f"{data['subject']} ({teacher_name})"
@@ -701,6 +856,28 @@ class TimetableWindow(QMainWindow):
             super().keyPressEvent(event)
 
     def handle_cell_click(self, key):
+        # [추가] TEACHER_VIEW 셀을 클릭했을 때의 논리적 연결 (가로채기)
+        if isinstance(key, tuple) and key[0] == "TEACHER_VIEW":
+            _, teacher_name, day, period = key
+            locations = list(self.logic.teachers_schedule.get(teacher_name, {}).get(day, {}).get(period, set()))
+            
+            if locations:
+                # 수업이 있는 셀 클릭 -> 해당 반의 스케줄 클릭으로 인식
+                g, c = locations[0]
+                key = (str(g), str(c), day, period)
+            else:
+                # 빈 셀 클릭 -> 연쇄 이동 모드일 때만 허용
+                if self.work_mode == "CHAIN" and self.chain_floating_data:
+                    orig_g, orig_c = self.chain_floating_data['origin_gc']
+                    floater_teacher = self.chain_floating_data['teacher']
+                    if teacher_name != floater_teacher:
+                        QMessageBox.warning(self, "오류", f"해당 수업은 {floater_teacher} 선생님의 수업입니다.\n{floater_teacher} 선생님의 행에만 배치할 수 있습니다.")
+                        return
+                    # 대상 학급(orig_g, orig_c)의 해당 시간으로 연결
+                    key = (orig_g, orig_c, day, period)
+                else:
+                    self.status_bar.setText("⚠️ 빈 시간입니다.")
+                    return
         grade, cls, day, period = key
         grade, cls = str(grade), str(cls)
         cell_data = self.logic.schedule[grade][cls][day].get(period)
@@ -771,12 +948,18 @@ class TimetableWindow(QMainWindow):
                     if (grade, cls) != (orig_g, orig_c):
                         QMessageBox.warning(self, "오류", "같은 반 내에서 이동해야 합니다.")
                         return
+                    
+                    if day != orig_d:
+                        QMessageBox.warning(self, "안내", "AI 자동 연쇄 이동은 현재 같은 요일 내에서만 지원됩니다.\n다른 요일로의 이동은 수동 연쇄 모드를 이용해 주세요.")
+                        return                     
+                        
                     success, msg, logs = self.ai_mover.try_ai_move(orig_g, orig_c, orig_d, orig_p, day, period)
                     if success: self.status_bar.setText(f"✅ {msg}")
                     else:
                         QMessageBox.warning(self, "AI 실패", msg)
                         self.status_bar.setText("AI 이동 실패")
                     self.chain_floating_data = None
+                    self.highlighted_teachers = {}
                     self.update_log_view()
             else:
                 if not self.chain_floating_data:
@@ -809,10 +992,23 @@ class TimetableWindow(QMainWindow):
                     else:
                         self.chain_floating_data = None
                         self.status_bar.setText("✅ 이동 완료")
+                        self.highlighted_teachers = {}
                     self.update_log_view()
+        #if self.view_mode == "ALL_TEACHER":
+        #    # 전체 교사 모드에서는 셀 구조(공강 <-> 수업) 자체가 변하므로 안전하게 전체 그리드를 새로고침합니다.
+        #    from PySide6.QtCore import QTimer
+        #    QTimer.singleShot(0, self.refresh_grid)
+        #else:
+        #    self.update_cell_visuals()
         self.update_cell_visuals()
 
     def handle_right_click(self, key):
+        if isinstance(key, tuple) and key[0] == "TEACHER_VIEW":
+            _, teacher_name, day, period = key
+            locations = list(self.logic.teachers_schedule.get(teacher_name, {}).get(day, {}).get(period, set()))
+            if not locations: return # 공강은 잠글 수 없음
+            g, c = locations[0]
+            key = (str(g), str(c), day, period)
         grade, cls, day, period = key
         is_locked = self.logic.toggle_lock(grade, cls, day, period)
         msg = "🔒 잠금 설정" if is_locked else "🔓 잠금 해제"
@@ -847,6 +1043,20 @@ class TimetableWindow(QMainWindow):
         self.grid_layout.setColumnMinimumWidth(0, 50)
         
         classes = self.logic.get_all_sorted_classes()
+        
+        # -----------------------------
+        if hasattr(self, 'chk_only_changed') and self.chk_only_changed.isChecked():
+            changed_set = self.get_changed_classes()
+            classes = [cls for cls in classes if (str(cls[0]), str(cls[1])) in changed_set]
+            
+            if not classes:
+                lbl = QLabel("현재 변경된 학급 수업이 없습니다.")
+                lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                lbl.setStyleSheet("font-size: 14px; font-weight: bold; color: #6b7280; padding: 20px;")
+                self.grid_layout.addWidget(lbl, 1, 0, 1, 10) # 중앙에 메시지 띄우기
+                return
+        # -----------------------------
+        
         total_rows = len(classes) + 1  
 
         col = 1
@@ -872,6 +1082,70 @@ class TimetableWindow(QMainWindow):
                     self.add_cell(g, c, day, p, row, col)
                     col += 1
                 if day != config.DAYS[-1]: col += 1
+
+    def render_all_teacher(self):
+        """교사 전체의 주간 시간표를 교과별로 정렬하여 렌더링합니다."""
+        self.add_header("교사(교과)", 0, 0)
+        self.grid_layout.setColumnMinimumWidth(0, 95)
+        
+        # 1. 교사 목록과 전체 행 개수를 먼저 계산합니다 (1000행 버그 방지)
+        teachers = self.logic.get_all_teachers_sorted_by_subject()
+        
+        # -----------------------------
+        if hasattr(self, 'chk_only_changed') and self.chk_only_changed.isChecked():
+            changed_set = self.get_changed_teachers()
+            teachers = [t for t in teachers if t in changed_set]
+            
+            if not teachers:
+                lbl = QLabel("현재 변경된 교사 수업이 없습니다.")
+                lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                lbl.setStyleSheet("font-size: 14px; font-weight: bold; color: #6b7280; padding: 20px;")
+                self.grid_layout.addWidget(lbl, 1, 0, 1, 10)
+                return
+        # -----------------------------
+        
+        total_rows = len(teachers) + 1
+        
+        # 2. 상단 헤더 (요일 및 교시) 생성 및 세로 구분선 추가
+        col = 1
+        for day in config.DAYS:
+            limit = config.PERIODS_PER_DAY[day]
+            for p in range(1, limit + 1):
+                self.add_header(f"{day}{p}", 0, col)
+                col += 1
+            
+            # 요일 사이 세로 구분선 (정확한 total_rows 한 번에 적용)
+            if day != config.DAYS[-1]:
+                lbl = QLabel()
+                lbl.setFixedWidth(5)
+                lbl.setStyleSheet("background-color: #d1d5db;")
+                self.grid_layout.addWidget(lbl, 0, col, total_rows, 1) 
+                col += 1
+
+        # 3. 교사별 행(Row) 생성
+        for r, teacher in enumerate(teachers):
+            row = r + 1
+            subj = self.logic.get_teacher_primary_subject(teacher)
+            display_text = f"{teacher}\n({subj})" if subj else teacher
+            self.add_header(display_text, row, 0)
+            
+            col = 1
+            for day in config.DAYS:
+                limit = config.PERIODS_PER_DAY[day]
+                for p in range(1, limit + 1):
+                    # 공강이든 수업이든 무조건 하나의 뷰 템플릿으로 생성
+                    key = ("TEACHER_VIEW", teacher, day, p)
+                    cell = ClickableFrame(key)
+                    self._update_single_cell(cell, key)
+                    cell.clicked.connect(self.handle_cell_click)
+                    cell.right_clicked.connect(self.handle_right_click)
+                    self.grid_layout.addWidget(cell, row, col)
+                    self.cell_widget_map[key] = cell
+                    col += 1
+                
+                # 세로 구분선이 있는 열 건너뛰기
+                if day != config.DAYS[-1]:
+                    col += 1
 
     def render_all_day(self):
         if not hasattr(self, 'combo_sel'): return
