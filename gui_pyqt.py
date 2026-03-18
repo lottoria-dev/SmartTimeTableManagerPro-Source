@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (
     QRadioButton, QCheckBox, QAbstractItemView, QSizePolicy, 
     QDialog, QTextEdit, QLayout
 )
-from PySide6.QtCore import Qt, Signal, QSize, QMimeData # pyqtSignal -> Signal
+from PySide6.QtCore import Qt, Signal, QSize, QMimeData 
 from PySide6.QtGui import QFont, QColor, QPalette, QIcon, QKeyEvent, QCloseEvent
 
 import config
@@ -19,10 +19,15 @@ from ai_mover import AIChainedMover
 from gui_styles import STYLE_SHEET, COLORS
 from gui_components import HelpDialog, ClickableFrame, LogDialog
 
+# [리팩토링] 분리된 매니저 클래스들 임포트
+from gui_clipboard import ClipboardManager
+from gui_interaction import CellInteractionHandler
+from gui_grid_renderer import GridRenderer
+
 class TimetableWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Smart Timetable Manager Pro v2.2.1")
+        self.setWindowTitle("Smart Timetable Manager Pro v2.3.1")
         self.resize(1520, 750)
         
         self.force_light_palette()
@@ -44,17 +49,18 @@ class TimetableWindow(QMainWindow):
         self.last_swapped_cells = []
         
         self.chain_floating_data = None
-        
-        # 셀 위젯 관리 맵
         self.cell_widget_map = {}
         
-        # [v1.2.0] 로그 다이얼로그 초기화
         self.log_dialog = LogDialog(self)
+        
+        # [리팩토링] 기능별 전담 매니저 생성
+        self.clipboard_manager = ClipboardManager(self)
+        self.interaction_handler = CellInteractionHandler(self)
+        self.grid_renderer = GridRenderer(self)
 
         self.init_ui()
 
     def force_light_palette(self):
-        """시스템 다크모드를 무시하고 밝은 색상 테마를 강제 적용"""
         palette = QPalette()
         palette.setColor(QPalette.ColorRole.Window, QColor(255, 255, 255))
         palette.setColor(QPalette.ColorRole.WindowText, QColor(31, 41, 55))
@@ -79,7 +85,7 @@ class TimetableWindow(QMainWindow):
         main_layout.setContentsMargins(2, 2, 2, 2)
         main_layout.setSpacing(5)
 
-        # 1. 상단 컨트롤 패널 (Card)
+        # 1. 상단 컨트롤 패널
         top_panel = QFrame()
         top_panel.setObjectName("Card")
         top_layout = QHBoxLayout(top_panel)
@@ -97,7 +103,7 @@ class TimetableWindow(QMainWindow):
         self.btn_save.setObjectName("SuccessBtn")
         
         self.btn_copy = QPushButton("📋 복사")
-        self.btn_copy.clicked.connect(self.copy_to_clipboard)
+        self.btn_copy.clicked.connect(self.copy_to_clipboard) # 위임 처리
         self.btn_copy.setObjectName("InfoBtn")
         
         self.btn_undo = QPushButton("↩ 실행취소")
@@ -159,7 +165,7 @@ class TimetableWindow(QMainWindow):
         self.combo_cover_teacher = QComboBox()
         self.combo_cover_teacher.setMinimumWidth(120)
         btn_apply_cover = QPushButton("배정")
-        btn_apply_cover.clicked.connect(self.execute_cover)
+        btn_apply_cover.clicked.connect(self.execute_cover) # 위임 처리
         btn_apply_cover.setObjectName("PrimaryBtn")
         cover_layout.addWidget(self.combo_cover_teacher)
         cover_layout.addWidget(btn_apply_cover)
@@ -222,28 +228,17 @@ class TimetableWindow(QMainWindow):
         self.selector_layout.setContentsMargins(0, 0, 0, 0)
         option_layout.addWidget(self.selector_stack)
         
-        # ----------------------------------------
         self.chk_only_changed = QCheckBox("🔄 변경된 항목만 보기")
         self.chk_only_changed.stateChanged.connect(self.refresh_grid)
-        
-        # CSS 스타일을 다중 줄 문자열로 적용해서 전체 테두리와 마우스 호버 효과까지 추가!
         self.chk_only_changed.setStyleSheet("""
             QCheckBox {
-                font-weight: bold; 
-                color: #d97706; 
-                margin-left: 15px;
-                border: 1px solid #9ca3af; /* 눈에 띄는 회색 테두리 */
-                border-radius: 5px;        /* 모서리 둥글게 */
-                padding: 4px 8px;          /* 안쪽 여백을 줘서 버튼처럼 보이게 */
-                background-color: #ffffff; /* 하얀색 배경 */
+                font-weight: bold; color: #d97706; margin-left: 15px;
+                border: 1px solid #9ca3af; border-radius: 5px;
+                padding: 4px 8px; background-color: #ffffff;
             }
-            QCheckBox:hover {
-                background-color: #f3f4f6; /* 마우스를 올리면 살짝 짙어지는 효과 */
-            }
+            QCheckBox:hover { background-color: #f3f4f6; }
         """)
         option_layout.addWidget(self.chk_only_changed)
-        # ----------------------------------------
-        
         option_layout.addStretch()
 
         grid_group_layout.addWidget(option_bar)
@@ -266,8 +261,7 @@ class TimetableWindow(QMainWindow):
     def closeEvent(self, event: QCloseEvent):
         if self.logic.is_modified:
             reply = QMessageBox.question(
-                self, "종료 확인",
-                "변경된 내용이 저장되지 않았습니다.\n저장하고 종료하시겠습니까?",
+                self, "종료 확인", "변경된 내용이 저장되지 않았습니다.\n저장하고 종료하시겠습니까?",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No | QMessageBox.StandardButton.Cancel
             )
             
@@ -289,10 +283,10 @@ class TimetableWindow(QMainWindow):
         self.log_dialog.raise_()
         self.log_dialog.activateWindow()
 
-    # --- 기능 구현 ---
     def show_help(self):
         HelpDialog(self).exec()
 
+    # --- 기능 및 상태 관리 래퍼 (Wrapper) ---
     def load_csv(self):
         file_path, _ = QFileDialog.getOpenFileName(self, "CSV 파일 열기", "", "CSV Files (*.csv)")
         if not file_path: return
@@ -309,11 +303,8 @@ class TimetableWindow(QMainWindow):
 
     def save_csv(self):
         if not self.logic.schedule: return
-        
         current_time = datetime.now().strftime("%y%m%d%H%M%S")
-        default_filename = f"timetable-{current_time}.csv"
-        
-        file_path, _ = QFileDialog.getSaveFileName(self, "CSV 파일 저장", default_filename, "CSV Files (*.csv)")
+        file_path, _ = QFileDialog.getSaveFileName(self, "CSV 파일 저장", f"timetable-{current_time}.csv", "CSV Files (*.csv)")
         if not file_path: return
         success, msg = self.logic.export_csv(file_path)
         if success:
@@ -321,150 +312,6 @@ class TimetableWindow(QMainWindow):
             QMessageBox.information(self, "완료", msg)
         else:
             QMessageBox.critical(self, "오류", msg)
-
-    def copy_to_clipboard(self):
-        if not self.logic.schedule:
-            self.status_bar.setText("⚠️ 복사할 데이터가 없습니다.")
-            return
-
-        headers = []
-        data_rows = []
-
-        if self.view_mode == "ALL_WEEK":
-            headers = ["학반"]
-            for day in config.DAYS:
-                limit = config.PERIODS_PER_DAY[day]
-                for p in range(1, limit + 1):
-                    headers.append(f"{day}{p}")
-            
-            classes = self.logic.get_all_sorted_classes()
-            for g, c in classes:
-                row_items = [f"{g}-{c}"]
-                for day in config.DAYS:
-                    limit = config.PERIODS_PER_DAY[day]
-                    for p in range(1, limit + 1):
-                        data = self.logic.schedule[str(g)][str(c)][day].get(p)
-                        if data:
-                            row_items.append(f"{data['subject']} ({data['teacher']})")
-                        else:
-                            row_items.append("")
-                data_rows.append(row_items)
-
-        elif self.view_mode == "ALL_DAY":
-            target_day = self.combo_sel.currentText() if hasattr(self, 'combo_sel') else config.DAYS[0]
-            if not target_day: return
-            
-            headers = ["학반"]
-            limit = config.PERIODS_PER_DAY[target_day]
-            for p in range(1, limit + 1):
-                headers.append(f"{p}교시")
-            
-            classes = self.logic.get_all_sorted_classes()
-            for g, c in classes:
-                row_items = [f"{g}-{c}"]
-                for p in range(1, limit + 1):
-                    data = self.logic.schedule[str(g)][str(c)][target_day].get(p)
-                    if data:
-                        row_items.append(f"{data['subject']} ({data['teacher']})")
-                    else:
-                        row_items.append("")
-                data_rows.append(row_items)
-        
-        elif self.view_mode == "ALL_TEACHER":
-            headers = ["교사(주교과)"]
-            for day in config.DAYS:
-                limit = config.PERIODS_PER_DAY[day]
-                for p in range(1, limit + 1):
-                    headers.append(f"{day}{p}")
-            
-            teachers = self.logic.get_all_teachers_sorted_by_subject()
-            for teacher in teachers:
-                subj = self.logic.get_teacher_primary_subject(teacher)
-                row_items = [f"{teacher} ({subj})" if subj else teacher]
-                for day in config.DAYS:
-                    limit = config.PERIODS_PER_DAY[day]
-                    for p in range(1, limit + 1):
-                        locations = list(self.logic.teachers_schedule.get(teacher, {}).get(day, {}).get(p, set()))
-                        if locations:
-                            g, c = locations[0]
-                            data = self.logic.schedule[str(g)][str(c)][day].get(p)
-                            subj_name = data['subject'] if data else ""
-                            row_items.append(f"{g}-{c} ({subj_name})")
-                        else:
-                            row_items.append("")
-                data_rows.append(row_items)
-        
-        elif self.view_mode in ["SINGLE", "TEACHER", "SUBJECT"]:
-            headers = ["교시"] + config.DAYS
-            target_val = self.combo_sel.currentText()
-            
-            for p in range(1, config.MAX_PERIODS + 1):
-                row_items = [f"{p}교시"]
-                for day in config.DAYS:
-                    if p > config.PERIODS_PER_DAY[day]:
-                        row_items.append("")
-                        continue
-
-                    content = ""
-                    if self.view_mode == "SINGLE":
-                        try:
-                            g, c = target_val.split('-')
-                            data = self.logic.schedule[g][c][day].get(p)
-                            if data: content = f"{data['subject']} ({data['teacher']})"
-                        except: pass
-                    elif self.view_mode == "TEACHER":
-                         if target_val in self.logic.teachers_schedule:
-                            if day in self.logic.teachers_schedule[target_val]:
-                                if p in self.logic.teachers_schedule[target_val][day]:
-                                    class_set = self.logic.teachers_schedule[target_val][day][p]
-                                    if class_set:
-                                        info = list(class_set)[0]
-                                        content = f"{info[0]}-{info[1]} ({self.logic.schedule[str(info[0])][str(info[1])][day][p]['subject']})"
-                    elif self.view_mode == "SUBJECT":
-                        matches = []
-                        classes = self.logic.get_all_sorted_classes()
-                        for g, c in classes:
-                            info = self.logic.schedule[str(g)][str(c)][day].get(p)
-                            if info and self.is_subject_similar(info.get('subject'), target_val):
-                                matches.append(f"{g}-{c}({info['teacher']})")
-                        content = ", ".join(matches)
-                    
-                    row_items.append(content)
-                data_rows.append(row_items)
-
-        tsv_lines = ["\t".join(headers)]
-        for row in data_rows:
-            tsv_lines.append("\t".join(row))
-        full_tsv = "\n".join(tsv_lines)
-
-        html_parts = []
-        html_parts.append('<meta charset="utf-8">') 
-        html_parts.append('<table border="1" style="border-collapse: collapse;">')
-        
-        html_parts.append('<thead><tr>')
-        for h in headers:
-            html_parts.append(f'<th style="background-color: #f0f0f0; padding: 5px;">{h}</th>')
-        html_parts.append('</tr></thead>')
-        
-        html_parts.append('<tbody>')
-        for row in data_rows:
-            html_parts.append('<tr>')
-            for cell in row:
-                safe_cell = str(cell).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-                html_parts.append(f'<td style="mso-number-format:\'@\'; padding: 5px;">{safe_cell}</td>')
-            html_parts.append('</tr>')
-        html_parts.append('</tbody></table>')
-        
-        full_html = "".join(html_parts)
-
-        mime_data = QMimeData()
-        mime_data.setText(full_tsv) 
-        mime_data.setHtml(full_html) 
-
-        QApplication.clipboard().setMimeData(mime_data)
-        
-        self.status_bar.setText("📋 복사 완료 (엑셀 날짜 변환 방지 적용)")
-        self.status_bar.setStyleSheet("color: #6366f1; font-weight: bold; padding-left: 10px; font-size: 11px;")
 
     def undo_action(self):
         self.cancel_action()
@@ -489,8 +336,6 @@ class TimetableWindow(QMainWindow):
             self.chain_floating_data = None
         self.combo_cover_teacher.clear()
         self.status_bar.setText("선택이 취소되었습니다.")
-        
-        # 이전 코드에 있던 복잡한 QTimer 분기를 다 지우고 이 한 줄만 남긴다.
         self.update_cell_visuals()
 
     def reset_all(self):
@@ -525,7 +370,15 @@ class TimetableWindow(QMainWindow):
         self.refresh_selectors()
         self.refresh_grid()
 
-    # --- 그리드 렌더링 ---
+    def update_log_view(self):
+        logs = self.logic.get_diff_list() if hasattr(self.logic, 'get_diff_list') else self.logic.change_logs
+        self.log_dialog.update_logs(logs)
+
+    def keyPressEvent(self, event: QKeyEvent):
+        if event.key() == Qt.Key.Key_Escape:
+            self.cancel_action()
+        else:
+            super().keyPressEvent(event)
 
     def refresh_selectors(self):
         for i in reversed(range(self.selector_layout.count())): 
@@ -539,23 +392,17 @@ class TimetableWindow(QMainWindow):
         elif self.view_mode == "SINGLE":
             self.selector_layout.addWidget(QLabel("학급:"))
             self.combo_sel = QComboBox()
-            
             classes = self.logic.get_all_sorted_classes()
             self.combo_sel.addItems([f"{g}-{c}" for g, c in classes])
-            
             self.adjust_combo_width(self.combo_sel)
-            
             self.combo_sel.currentTextChanged.connect(self.refresh_grid)
             self.selector_layout.addWidget(self.combo_sel)
         elif self.view_mode == "TEACHER":
             self.selector_layout.addWidget(QLabel("교사:"))
             self.combo_sel = QComboBox()
-            
             teachers = self.logic.get_all_teachers_sorted()
             self.combo_sel.addItems(teachers)
-            
             self.adjust_combo_width(self.combo_sel)
-            
             self.combo_sel.currentTextChanged.connect(self.refresh_grid)
             self.selector_layout.addWidget(self.combo_sel)
         elif self.view_mode == "SUBJECT":
@@ -589,7 +436,6 @@ class TimetableWindow(QMainWindow):
             
             representatives.sort()
             self.combo_sel.addItems(representatives)
-
             self.adjust_combo_width(self.combo_sel)
             self.combo_sel.currentTextChanged.connect(self.refresh_grid)
             self.selector_layout.addWidget(self.combo_sel)
@@ -599,242 +445,12 @@ class TimetableWindow(QMainWindow):
         fm = combo.fontMetrics()
         for i in range(combo.count()):
             w = fm.horizontalAdvance(combo.itemText(i))
-            if w > width:
-                width = w
+            if w > width: width = w
         combo.setMinimumWidth(width + 40)
 
-    def refresh_grid(self, _=None):
-        old_widget = self.scroll_area.widget()
-        if old_widget: old_widget.deleteLater()
-            
-        self.grid_container = QWidget()
-        
-        main_vbox = QVBoxLayout(self.grid_container)
-        main_vbox.setContentsMargins(0, 0, 0, 0)
-        main_vbox.setSpacing(0)
-        
-        h_box = QHBoxLayout()
-        h_box.setContentsMargins(0, 0, 0, 0)
-        h_box.setSpacing(0)
-        
-        self.grid_layout = QGridLayout()
-        self.grid_layout.setSpacing(1)
-        self.grid_layout.setContentsMargins(1, 1, 1, 1)
-        
-        h_box.addLayout(self.grid_layout)
-        h_box.addStretch(1) 
-        
-        main_vbox.addLayout(h_box)
-        main_vbox.addStretch(1) 
-        
-        self.scroll_area.setWidget(self.grid_container)
-        
-        self.cell_widget_map.clear()
-        
-        if self.view_mode == "ALL_WEEK": self.render_all_week()
-        elif self.view_mode == "ALL_DAY": self.render_all_day()
-        elif self.view_mode == "SINGLE": self.render_single()
-        elif self.view_mode == "TEACHER": self.render_teacher()
-        elif self.view_mode == "ALL_TEACHER": self.render_all_teacher()
-        elif self.view_mode == "SUBJECT": self.render_subject()
-
-    def get_changed_classes(self):
-        """시간표가 변경된 학급 목록을 반환합니다."""
-        changed = set()
-        if not self.logic.original_schedule: return changed
-        classes = self.logic.get_all_sorted_classes()
-        for g, c in classes:
-            for day in config.DAYS:
-                limit = config.PERIODS_PER_DAY[day]
-                for p in range(1, limit + 1):
-                    if self.logic.is_changed(g, c, day, p):
-                        changed.add((str(g), str(c)))
-        return changed
-
-    def get_changed_teachers(self):
-        """시간표가 변경된(추가/삭제된) 교사 목록을 반환합니다."""
-        changed = set()
-        if not self.logic.original_schedule: return changed
-        classes = self.logic.get_all_sorted_classes()
-        for g, c in classes:
-            for day in config.DAYS:
-                limit = config.PERIODS_PER_DAY[day]
-                for p in range(1, limit + 1):
-                    if self.logic.is_changed(g, c, day, p):
-                        # 현재 시간표에 있는 교사 추가
-                        curr = self.logic.schedule[str(g)][str(c)][day].get(p)
-                        if curr and curr.get('teacher'):
-                            changed.add(curr['teacher'])
-                        
-                        # 원본 시간표에 있었던 교사 추가 (이동해서 사라진 교사도 추적)
-                        orig_g = self.logic.original_schedule.get(str(g), {})
-                        orig_c = orig_g.get(str(c), {})
-                        orig_d = orig_c.get(day, {})
-                        orig_p = orig_d.get(p)
-                        if orig_p and orig_p.get('teacher'):
-                            changed.add(orig_p['teacher'])
-        return changed    
-
-    def update_cell_visuals(self):
-        for key, cell_widget in self.cell_widget_map.items():
-            self._update_single_cell(cell_widget, key)
-
-    def _update_single_cell(self, cell, key):
-        # [추가] 교사 전체 조회 모드 전용 초고속 시각 업데이트
-        if isinstance(key, tuple) and key[0] == "TEACHER_VIEW":
-            _, teacher_name, day, period = key
-            locations = list(self.logic.teachers_schedule.get(teacher_name, {}).get(day, {}).get(period, set()))
-            
-            bg_color = COLORS["cell_default"]
-            border_color = "#e5e7eb"
-            border_width = 1
-            text_color = "#1f2937"
-            main_text, sub_text = "", ""
-            real_key = None
-
-            # 1. 수업이 있는 경우 데이터 연동
-            if locations:
-                g, c = locations[0]
-                data = self.logic.schedule[str(g)][str(c)][day].get(period)
-                if data:
-                    main_text, sub_text = data['subject'], f"{g}-{c}"
-                    real_key = (str(g), str(c), day, period)
-                    
-                    if self.logic.is_locked(g, c, day, period):
-                        bg_color = COLORS["cell_locked"]
-                        main_text = "🔒 " + main_text
-                    if self.logic.is_changed(g, c, day, period):
-                        bg_color = COLORS["cell_changed"]
-                    if len(locations) > 1:
-                        bg_color = COLORS["cell_conflict"]
-
-            # 2. 이동/선택 모드일 때의 하이라이트 효과
-            if real_key and self.swap_source == real_key:
-                bg_color = COLORS["cell_selected"]
-                border_color, border_width = COLORS["accent"], 2
-            elif self.work_mode == "SWAP" and self.swap_source:
-                src_g, src_c, _, _ = self.swap_source
-                if real_key and (str(g), str(c)) == (src_g, src_c) and (day, period) in self.swap_candidates:
-                    bg_color = COLORS["cell_target"]
-                    border_color = "#10b981"
-            elif self.work_mode == "CHAIN" and self.chain_floating_data:
-                orig_g, orig_c = self.chain_floating_data['origin_gc']
-                orig_d, orig_p = self.chain_floating_data['origin_time']
-                floater = self.chain_floating_data['teacher']
-                
-                if day == orig_d and period == orig_p and teacher_name == floater:
-                    bg_color = COLORS["cell_chain_tgt"] # 이탈한 자리
-                elif teacher_name == floater:
-                    if not self.logic.is_locked(orig_g, orig_c, day, period):
-                        bg_color = COLORS["cell_target"] # 들어갈 수 있는 타겟 자리
-                        border_color = "#10b981"
-
-            # 3. 교사 강조 및 3연강 표시
-            if teacher_name and teacher_name in self.highlighted_teachers:
-                if bg_color in [COLORS["cell_default"], COLORS["cell_locked"], COLORS["cell_changed"], COLORS["cell_conflict"]]:
-                    bg_color = self.highlighted_teachers[teacher_name]
-                    if bg_color == COLORS["cell_selected"]: border_color = COLORS["accent"]
-
-            if teacher_name and self.logic.check_consecutive_classes(teacher_name, day, period):
-                text_color = "#9333ea" 
-
-            # 내용물만 쏙 교체 (위젯 파괴 안 함)
-            cell.set_content(main_text, sub_text, bg_color, border_color, border_width, text_color)
-            return
-        grade, cls, day, period = key
-        grade, cls = str(grade), str(cls)
-        period = int(period)
-        data = self.logic.schedule[grade][cls][day].get(period)
-        
-        main_text, sub_text = "", ""
-        teacher_name = data['teacher'] if data else None
-
-        if data:
-            if self.view_mode in ["TEACHER", "ALL_TEACHER"]:
-                main_text, sub_text = data['subject'], f"{grade}-{cls}"
-            elif self.view_mode == "ALL_DAY":
-                main_text = f"{data['subject']} ({teacher_name})"
-            else:
-                main_text, sub_text = data['subject'], teacher_name
-
-        bg_color = COLORS["cell_default"]
-        border_color = "#e5e7eb"
-        border_width = 1
-        text_color = "#1f2937" 
-
-        if self.logic.is_locked(grade, cls, day, period):
-            bg_color = COLORS["cell_locked"]
-            main_text = "🔒 " + main_text
-        if self.logic.is_changed(grade, cls, day, period):
-            bg_color = COLORS["cell_changed"]
-
-        if teacher_name:
-            t_sched = self.logic.teachers_schedule.get(teacher_name, {})
-            if day in t_sched and period in t_sched[day]:
-                if len(t_sched[day][period]) > 1:
-                    bg_color = COLORS["cell_conflict"] 
-
-        if self.swap_source == key:
-            bg_color = COLORS["cell_selected"]
-            border_color, border_width = COLORS["accent"], 2
-        elif self.work_mode == "SWAP" and self.swap_source:
-             src_g, src_c, _, _ = self.swap_source
-             if (grade, cls) == (src_g, src_c) and (day, period) in self.swap_candidates:
-                 bg_color = COLORS["cell_target"]
-                 border_color = "#10b981"
-        elif self.work_mode == "COVER" and self.selected_cell_info == key:
-            bg_color = COLORS["cell_conflict"]
-            border_color, border_width = "#ef4444", 2
-        elif self.work_mode == "CHAIN" and self.chain_floating_data:
-            orig_g, orig_c = self.chain_floating_data['origin_gc']
-            orig_d, orig_p = self.chain_floating_data['origin_time']
-            floater = self.chain_floating_data['teacher']
-            if key == (str(orig_g), str(orig_c), orig_d, orig_p):
-                bg_color = COLORS["cell_chain_tgt"]
-            elif (grade, cls) == (str(orig_g), str(orig_c)):
-                 if not self.logic.is_locked(grade, cls, day, period):
-                     if self.logic.is_teacher_busy(floater, day, period):
-                         bg_color = COLORS["cell_conflict"]
-                     else:
-                         bg_color = COLORS["cell_target"]
-            if teacher_name == floater:
-                bg_color = COLORS["cell_chain_src"]
-
-        if teacher_name and teacher_name in self.highlighted_teachers:
-             if bg_color in [COLORS["cell_default"], COLORS["cell_locked"], COLORS["cell_changed"], COLORS["cell_conflict"]]:
-                 bg_color = self.highlighted_teachers[teacher_name]
-                 if bg_color == COLORS["cell_selected"]: border_color = COLORS["accent"]
-
-        if teacher_name and self.is_consecutive_3(teacher_name, day, period):
-             text_color = "#9333ea" 
-
-        cell.set_content(main_text, sub_text, bg_color, border_color, border_width, text_color)
-
-    def add_header(self, text, r, c, rowspan=1, colspan=1):
-        lbl = QLabel(text)
-        lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        lbl.setStyleSheet("background-color: #e5e7eb; font-weight: bold; border: 1px solid #d1d5db; color: #1f2937;")
-        # [v1.2.0] 헤더 높이 축소 (30 -> 26)
-        lbl.setMinimumHeight(26)
-        if len(text) > 4: lbl.setMinimumWidth(80) 
-        else: lbl.setMinimumWidth(40)
-        self.grid_layout.addWidget(lbl, r, c, rowspan, colspan)
-
-    def add_cell(self, grade, cls, day, period, r, c, rowspan=1, colspan=1):
-        key = (str(grade), str(cls), day, int(period))
-        cell = ClickableFrame(key)
-        self._update_single_cell(cell, key)
-        cell.clicked.connect(self.handle_cell_click)
-        cell.right_clicked.connect(self.handle_right_click)
-        self.grid_layout.addWidget(cell, r, c, rowspan, colspan)
-        self.cell_widget_map[key] = cell
-
-    def is_consecutive_3(self, teacher, day, period):
-        return self.logic.check_consecutive_classes(teacher, day, period)
-    
+    # 공통 유틸리티 (다른 매니저 클래스들에서 공유)
     def is_subject_similar(self, target, selected):
         if not target or not selected: return False
-        
         t = target.replace(" ", "")
         s = selected.replace(" ", "")
         
@@ -846,396 +462,17 @@ class TimetableWindow(QMainWindow):
             has_extra_s = any(c.isascii() and c.isalnum() for c in s)
             if has_extra_t or has_extra_s:
                 return True
-                
         return False
 
-    def keyPressEvent(self, event: QKeyEvent):
-        if event.key() == Qt.Key.Key_Escape:
-            self.cancel_action()
-        else:
-            super().keyPressEvent(event)
+    # --- 분리된 매니저로의 위임(Delegation) ---
+    def copy_to_clipboard(self):
+        self.clipboard_manager.copy_to_clipboard()
 
-    def handle_cell_click(self, key):
-        # [추가] TEACHER_VIEW 셀을 클릭했을 때의 논리적 연결 (가로채기)
-        if isinstance(key, tuple) and key[0] == "TEACHER_VIEW":
-            _, teacher_name, day, period = key
-            locations = list(self.logic.teachers_schedule.get(teacher_name, {}).get(day, {}).get(period, set()))
-            
-            if locations:
-                # 수업이 있는 셀 클릭 -> 해당 반의 스케줄 클릭으로 인식
-                g, c = locations[0]
-                key = (str(g), str(c), day, period)
-            else:
-                # 빈 셀 클릭 -> 연쇄 이동 모드일 때만 허용
-                if self.work_mode == "CHAIN" and self.chain_floating_data:
-                    orig_g, orig_c = self.chain_floating_data['origin_gc']
-                    floater_teacher = self.chain_floating_data['teacher']
-                    if teacher_name != floater_teacher:
-                        QMessageBox.warning(self, "오류", f"해당 수업은 {floater_teacher} 선생님의 수업입니다.\n{floater_teacher} 선생님의 행에만 배치할 수 있습니다.")
-                        return
-                    # 대상 학급(orig_g, orig_c)의 해당 시간으로 연결
-                    key = (orig_g, orig_c, day, period)
-                else:
-                    self.status_bar.setText("⚠️ 빈 시간입니다.")
-                    return
-        grade, cls, day, period = key
-        grade, cls = str(grade), str(cls)
-        cell_data = self.logic.schedule[grade][cls][day].get(period)
-        clicked_teacher = cell_data['teacher'] if cell_data else None
+    def refresh_grid(self, _=None):
+        self.grid_renderer.refresh_grid(_)
 
-        if clicked_teacher: self.highlighted_teachers = {clicked_teacher: COLORS["cell_selected"]}
-        else: self.highlighted_teachers = {}
-
-        if self.work_mode == "VIEW":
-            is_locked = "🔒 " if self.logic.is_locked(grade, cls, day, period) else ""
-            msg = f"{is_locked}선택: {clicked_teacher} ({cell_data['subject']})" if clicked_teacher else "빈 교시"
-            self.status_bar.setText(msg)
-        elif self.work_mode == "SWAP":
-            if self.logic.is_locked(grade, cls, day, period):
-                self.status_bar.setText("🔒 잠긴 수업입니다.")
-                return
-            if not self.swap_source:
-                if not cell_data:
-                    self.status_bar.setText("⚠️ 빈 교시는 선택할 수 없습니다.")
-                    return
-                self.swap_source = key
-                self.swap_candidates = self.logic.get_swap_candidates(grade, cls, day, period)
-                self.status_bar.setText(f"1단계: {clicked_teacher}. 이동할 위치(초록색)를 선택하세요.")
-            else:
-                src_g, src_c, src_d, src_p = self.swap_source
-                if key == self.swap_source:
-                    self.cancel_action()
-                    return
-                if (grade, cls) != (src_g, src_c):
-                    QMessageBox.warning(self, "오류", "같은 반 내에서만 교환 가능합니다.")
-                    return
-                if self.logic.is_locked(grade, cls, day, period):
-                    QMessageBox.warning(self, "오류", "목표 대상이 잠겨있습니다.")
-                    return
-                self.logic.execute_swap(grade, cls, src_d, src_p, day, period)
-                self.last_swapped_cells = [self.swap_source, key]
-                self.swap_source = None
-                self.swap_candidates = []
-                self.status_bar.setText("✅ 교체 완료")
-                self.update_log_view()
-        elif self.work_mode == "COVER":
-            if not cell_data: return
-            if self.logic.is_locked(grade, cls, day, period):
-                self.status_bar.setText("🔒 잠긴 수업입니다.")
-                return
-            self.selected_cell_info = key
-            self.highlighted_teachers = {clicked_teacher: COLORS["cell_conflict"]}
-            candidates = self.logic.get_cover_candidates(day, period)
-            self.combo_cover_teacher.clear()
-            if candidates:
-                self.combo_cover_teacher.addItems(candidates)
-                self.status_bar.setText(f"대상: {clicked_teacher}. 대체 교사를 선택하고 배정 버튼을 누르세요.")
-            else:
-                self.status_bar.setText("⚠️ 추천 가능한 교사가 없습니다.")
-        elif self.work_mode == "CHAIN":
-            if self.logic.is_locked(grade, cls, day, period): return
-            if self.use_ai_mode:
-                if not self.chain_floating_data:
-                    if not cell_data: return
-                    self.chain_floating_data = cell_data.copy()
-                    self.chain_floating_data['origin_gc'] = (grade, cls)
-                    self.chain_floating_data['origin_time'] = (day, period)
-                    self.highlighted_teachers = {clicked_teacher: COLORS["cell_chain_src"]}
-                    self.status_bar.setText(f"🤖 [AI] {clicked_teacher} 교사가 이동할 목표 위치를 클릭하세요.")
-                else:
-                    orig_g, orig_c = self.chain_floating_data['origin_gc']
-                    orig_d, orig_p = self.chain_floating_data['origin_time']
-                    if (grade, cls) != (orig_g, orig_c):
-                        QMessageBox.warning(self, "오류", "같은 반 내에서 이동해야 합니다.")
-                        return
-                    
-                    if day != orig_d:
-                        QMessageBox.warning(self, "안내", "AI 자동 연쇄 이동은 현재 같은 요일 내에서만 지원됩니다.\n다른 요일로의 이동은 수동 연쇄 모드를 이용해 주세요.")
-                        return                     
-                        
-                    success, msg, logs = self.ai_mover.try_ai_move(orig_g, orig_c, orig_d, orig_p, day, period)
-                    if success: self.status_bar.setText(f"✅ {msg}")
-                    else:
-                        QMessageBox.warning(self, "AI 실패", msg)
-                        self.status_bar.setText("AI 이동 실패")
-                    self.chain_floating_data = None
-                    self.highlighted_teachers = {}
-                    self.update_log_view()
-            else:
-                if not self.chain_floating_data:
-                    if not cell_data: return
-                    self.logic.save_snapshot()
-                    self.chain_floating_data = cell_data.copy()
-                    self.chain_floating_data['origin_gc'] = (grade, cls)
-                    self.chain_floating_data['origin_time'] = (day, period)
-                    self.logic.remove_class(grade, cls, day, period)
-                    self.highlighted_teachers = {clicked_teacher: COLORS["cell_chain_src"]}
-                    self.status_bar.setText(f"🚀 [이동 중] {clicked_teacher}. 어디에 놓으시겠습니까?")
-                else:
-                    orig_g, orig_c = self.chain_floating_data['origin_gc']
-                    if (grade, cls) != (orig_g, orig_c): return
-                    floater = self.chain_floating_data
-                    target_old_data = self.logic.schedule[grade][cls][day].get(period)
-                    self.logic.save_snapshot()
-                    self.logic.add_class(grade, cls, day, period, floater['subject'], floater['teacher'])
-                    self.logic.change_logs.append({
-                        "type": "연쇄", "class": f"{grade}-{cls}",
-                        "desc": f"{floater['teacher']} → {day}{period} 이동",
-                        "log_key": ("CHAIN", grade, cls, day, period)
-                    })
-                    if target_old_data:
-                        self.chain_floating_data = target_old_data.copy()
-                        self.chain_floating_data['origin_gc'] = (grade, cls)
-                        self.chain_floating_data['origin_time'] = (day, period)
-                        self.highlighted_teachers = {target_old_data['teacher']: COLORS["cell_chain_src"]}
-                        self.status_bar.setText(f"🔄 [밀림] {target_old_data['teacher']} 교사를 다시 배치하세요.")
-                    else:
-                        self.chain_floating_data = None
-                        self.status_bar.setText("✅ 이동 완료")
-                        self.highlighted_teachers = {}
-                    self.update_log_view()
-        #if self.view_mode == "ALL_TEACHER":
-        #    # 전체 교사 모드에서는 셀 구조(공강 <-> 수업) 자체가 변하므로 안전하게 전체 그리드를 새로고침합니다.
-        #    from PySide6.QtCore import QTimer
-        #    QTimer.singleShot(0, self.refresh_grid)
-        #else:
-        #    self.update_cell_visuals()
-        self.update_cell_visuals()
-
-    def handle_right_click(self, key):
-        if isinstance(key, tuple) and key[0] == "TEACHER_VIEW":
-            _, teacher_name, day, period = key
-            locations = list(self.logic.teachers_schedule.get(teacher_name, {}).get(day, {}).get(period, set()))
-            if not locations: return # 공강은 잠글 수 없음
-            g, c = locations[0]
-            key = (str(g), str(c), day, period)
-        grade, cls, day, period = key
-        is_locked = self.logic.toggle_lock(grade, cls, day, period)
-        msg = "🔒 잠금 설정" if is_locked else "🔓 잠금 해제"
-        self.status_bar.setText(f"[{grade}-{cls} {day}{period}] {msg}")
-        self.update_cell_visuals()
+    def update_cell_visuals(self):
+        self.grid_renderer.update_cell_visuals()
 
     def execute_cover(self):
-        if not self.selected_cell_info: return
-        new_teacher = self.combo_cover_teacher.currentText()
-        if not new_teacher: return
-        g, c, d, p = self.selected_cell_info
-        self.logic.update_teacher(g, c, d, p, new_teacher)
-        self.selected_cell_info = None
-        self.combo_cover_teacher.clear()
-        self.status_bar.setText(f"✅ 보강 완료: {new_teacher}")
-        self.update_log_view()
-        self.update_cell_visuals()
-
-    def update_log_view(self):
-        # [v1.2.0] 로그 다이얼로그 업데이트
-        if hasattr(self.logic, 'get_diff_list'):
-            logs = self.logic.get_diff_list()
-        else:
-            logs = self.logic.change_logs
-        
-        self.log_dialog.update_logs(logs)
-
-    # --- 렌더링 함수 ---
-    
-    def render_all_week(self):
-        self.add_header("학반", 0, 0)
-        self.grid_layout.setColumnMinimumWidth(0, 50)
-        
-        classes = self.logic.get_all_sorted_classes()
-        
-        # -----------------------------
-        if hasattr(self, 'chk_only_changed') and self.chk_only_changed.isChecked():
-            changed_set = self.get_changed_classes()
-            classes = [cls for cls in classes if (str(cls[0]), str(cls[1])) in changed_set]
-            
-            if not classes:
-                lbl = QLabel("현재 변경된 학급 수업이 없습니다.")
-                lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                lbl.setStyleSheet("font-size: 14px; font-weight: bold; color: #6b7280; padding: 20px;")
-                self.grid_layout.addWidget(lbl, 1, 0, 1, 10) # 중앙에 메시지 띄우기
-                return
-        # -----------------------------
-        
-        total_rows = len(classes) + 1  
-
-        col = 1
-        for day in config.DAYS:
-            limit = config.PERIODS_PER_DAY[day]
-            for p in range(1, limit + 1):
-                self.add_header(f"{day}{p}", 0, col)
-                col += 1
-            if day != config.DAYS[-1]:
-                lbl = QLabel()
-                lbl.setFixedWidth(5)
-                lbl.setStyleSheet("background-color: #d1d5db;")
-                self.grid_layout.addWidget(lbl, 0, col, total_rows, 1)
-                col += 1
-        
-        for r, (g, c) in enumerate(classes):
-            row = r + 1
-            self.add_header(f"{g}-{c}", row, 0)
-            col = 1
-            for day in config.DAYS:
-                limit = config.PERIODS_PER_DAY[day]
-                for p in range(1, limit + 1):
-                    self.add_cell(g, c, day, p, row, col)
-                    col += 1
-                if day != config.DAYS[-1]: col += 1
-
-    def render_all_teacher(self):
-        """교사 전체의 주간 시간표를 교과별로 정렬하여 렌더링합니다."""
-        self.add_header("교사(교과)", 0, 0)
-        self.grid_layout.setColumnMinimumWidth(0, 95)
-        
-        # 1. 교사 목록과 전체 행 개수를 먼저 계산합니다 (1000행 버그 방지)
-        teachers = self.logic.get_all_teachers_sorted_by_subject()
-        
-        # -----------------------------
-        if hasattr(self, 'chk_only_changed') and self.chk_only_changed.isChecked():
-            changed_set = self.get_changed_teachers()
-            teachers = [t for t in teachers if t in changed_set]
-            
-            if not teachers:
-                lbl = QLabel("현재 변경된 교사 수업이 없습니다.")
-                lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                lbl.setStyleSheet("font-size: 14px; font-weight: bold; color: #6b7280; padding: 20px;")
-                self.grid_layout.addWidget(lbl, 1, 0, 1, 10)
-                return
-        # -----------------------------
-        
-        total_rows = len(teachers) + 1
-        
-        # 2. 상단 헤더 (요일 및 교시) 생성 및 세로 구분선 추가
-        col = 1
-        for day in config.DAYS:
-            limit = config.PERIODS_PER_DAY[day]
-            for p in range(1, limit + 1):
-                self.add_header(f"{day}{p}", 0, col)
-                col += 1
-            
-            # 요일 사이 세로 구분선 (정확한 total_rows 한 번에 적용)
-            if day != config.DAYS[-1]:
-                lbl = QLabel()
-                lbl.setFixedWidth(5)
-                lbl.setStyleSheet("background-color: #d1d5db;")
-                self.grid_layout.addWidget(lbl, 0, col, total_rows, 1) 
-                col += 1
-
-        # 3. 교사별 행(Row) 생성
-        for r, teacher in enumerate(teachers):
-            row = r + 1
-            subj = self.logic.get_teacher_primary_subject(teacher)
-            display_text = f"{teacher}\n({subj})" if subj else teacher
-            self.add_header(display_text, row, 0)
-            
-            col = 1
-            for day in config.DAYS:
-                limit = config.PERIODS_PER_DAY[day]
-                for p in range(1, limit + 1):
-                    # 공강이든 수업이든 무조건 하나의 뷰 템플릿으로 생성
-                    key = ("TEACHER_VIEW", teacher, day, p)
-                    cell = ClickableFrame(key)
-                    self._update_single_cell(cell, key)
-                    cell.clicked.connect(self.handle_cell_click)
-                    cell.right_clicked.connect(self.handle_right_click)
-                    self.grid_layout.addWidget(cell, row, col)
-                    self.cell_widget_map[key] = cell
-                    col += 1
-                
-                # 세로 구분선이 있는 열 건너뛰기
-                if day != config.DAYS[-1]:
-                    col += 1
-
-    def render_all_day(self):
-        if not hasattr(self, 'combo_sel'): return
-        target_day = self.combo_sel.currentText()
-        if not target_day: return
-        self.add_header("학반", 0, 0)
-        self.grid_layout.setColumnMinimumWidth(0, 50)
-        limit = config.PERIODS_PER_DAY[target_day]
-        for p in range(1, limit + 1):
-            self.add_header(f"{p}교시", 0, p)
-        classes = self.logic.get_all_sorted_classes()
-        for r, (g, c) in enumerate(classes):
-            row = r + 1
-            self.add_header(f"{g}-{c}", row, 0)
-            for p in range(1, limit + 1):
-                self.add_cell(g, c, target_day, p, row, p)
-
-    def render_single(self):
-        if not hasattr(self, 'combo_sel'): return
-        cls_str = self.combo_sel.currentText()
-        if not cls_str: return
-        try: g, c = cls_str.split('-')
-        except: return
-        self.add_header("교시", 0, 0)
-        for i, day in enumerate(config.DAYS):
-            self.add_header(day, 0, i+1)
-            self.grid_layout.setColumnMinimumWidth(i+1, 120)
-        for p in range(1, config.MAX_PERIODS + 1):
-            self.add_header(f"{p}교시", p, 0)
-            for i, day in enumerate(config.DAYS):
-                if p <= config.PERIODS_PER_DAY[day]:
-                    self.add_cell(g, c, day, p, p, i+1)
-
-    def render_teacher(self):
-        if not hasattr(self, 'combo_sel'): return
-        t_name = self.combo_sel.currentText()
-        if not t_name: return
-        self.add_header("교시", 0, 0)
-        for i, day in enumerate(config.DAYS):
-            self.add_header(day, 0, i+1)
-            self.grid_layout.setColumnMinimumWidth(i+1, 120)
-        for p in range(1, config.MAX_PERIODS + 1):
-            self.add_header(f"{p}교시", p, 0)
-            for i, day in enumerate(config.DAYS):
-                found = False
-                if t_name in self.logic.teachers_schedule:
-                    if day in self.logic.teachers_schedule[t_name]:
-                        if p in self.logic.teachers_schedule[t_name][day]:
-                            class_set = self.logic.teachers_schedule[t_name][day][p]
-                            if class_set:
-                                info = list(class_set)[0]
-                                g, c = str(info[0]), str(info[1])
-                                self.add_cell(g, c, day, p, p, i+1)
-                                found = True
-                if not found and p <= config.PERIODS_PER_DAY[day]:
-                    empty = QLabel()
-                    empty.setStyleSheet(f"background-color: {COLORS['cell_default']}; border: 1px solid #e5e7eb;")
-                    self.grid_layout.addWidget(empty, p, i+1)
-
-    def render_subject(self):
-        if not hasattr(self, 'combo_sel'): return
-        subj_name = self.combo_sel.currentText()
-        if not subj_name: return
-
-        self.add_header("교시", 0, 0)
-        for i, day in enumerate(config.DAYS):
-            self.add_header(day, 0, i+1)
-            self.grid_layout.setColumnMinimumWidth(i+1, 120)
-
-        for p in range(1, config.MAX_PERIODS + 1):
-            self.add_header(f"{p}교시", p, 0)
-            for i, day in enumerate(config.DAYS):
-                if p <= config.PERIODS_PER_DAY[day]:
-                    matches = []
-                    classes = self.logic.get_all_sorted_classes()
-                    for g, c in classes:
-                        day_sched = self.logic.schedule[str(g)][str(c)].get(day, {})
-                        info = day_sched.get(p)
-                        if info:
-                            target_subject = info.get('subject')
-                            if self.is_subject_similar(target_subject, subj_name):
-                                matches.append(f"{g}-{c}({info['teacher']})")
-                    
-                    if matches:
-                        lbl = QLabel("\n".join(matches))
-                        lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                        lbl.setWordWrap(True)
-                        lbl.setStyleSheet(f"background-color: {COLORS['cell_default']}; border: 1px solid #e5e7eb; font-size: 11px; padding: 2px;")
-                        self.grid_layout.addWidget(lbl, p, i+1)
-                    else:
-                        empty = QLabel()
-                        empty.setStyleSheet(f"background-color: {COLORS['cell_default']}; border: 1px solid #e5e7eb;")
-                        self.grid_layout.addWidget(empty, p, i+1)
+        self.interaction_handler.execute_cover()
