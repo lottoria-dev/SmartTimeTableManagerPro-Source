@@ -38,27 +38,27 @@ class HelpDialog(QDialog):
 
 <h3>2. 작업 모드 상세</h3>
 <ul>
-    <li><b>👁️ 조회 모드:</b> 
+    <li><b>조회 모드:</b> 
         <ul>
             <li>수업 클릭 시 해당 교사의 주간 일정이 <span style="color:blue; font-weight:bold;">파란색</span>으로 강조됩니다.</li>
             <li>마우스 우클릭으로 셀을 <b>🔒 잠금/해제</b>하여 실수를 방지합니다.</li>
             <li>3연강 이상 교사는 <span style="color:purple; font-weight:bold;">보라색 텍스트</span>로 표시됩니다.</li>
         </ul>
     </li>
-    <li><b>🔄 맞교환 모드:</b> 
+    <li><b>맞교환 모드:</b> 
         <ul>
             <li>바꿀 두 수업을 차례로 클릭합니다. <b>(다른 요일 간 이동 가능)</b></li>
             <li>첫 번째 선택 시 이동 가능 시간은 <span style="color:green; font-weight:bold;">초록색</span>, 충돌 예상 시간은 <span style="color:red; font-weight:bold;">분홍색</span>으로 표시됩니다.</li>
         </ul>
     </li>
-    <li><b>🛠️ 보강 모드:</b> 결강 수업 선택 → 상단 메뉴에서 대체 교사 선택 → <b>'배정'</b> 클릭.</li>
-    <li><b>🔗 연쇄 이동 모드 (CHAIN):</b> 
+    <li><b>보강 모드:</b> 결강 수업 선택 → 상단 메뉴에서 대체 교사 선택 → <b>'배정'</b> 클릭.</li>
+    <li><b>연쇄 이동 모드 (CHAIN):</b> 
         <ul>
             <li>수업을 빈 공간이나 다른 수업 자리로 이동시킵니다. <b>(다른 요일로 이동 가능)</b></li>
             <li>밀려난 수업을 계속해서 이동시키며 연쇄적으로 정리합니다.</li>
         </ul>
     </li>
-    <li><b>🤖 AI 자동 모드:</b> 
+    <li><b>AI 자동 모드:</b> 
         <ul>
             <li><span style="color:red; font-weight:bold;">※ AI 모드는 같은 요일 내에서만 이동이 가능합니다.</span></li>
             <li><b>[출발할 수업]</b>과 <b>[도착할 시간]</b>을 클릭하면, AI가 최적의 이동 경로를 찾아 자동 재배치합니다.</li>
@@ -69,7 +69,7 @@ class HelpDialog(QDialog):
 <hr>
 <div style="font-size: 10pt; color: #555; line-height: 1.4;">
     <b>■ 개발자 정보</b><br>
-    - 버전: 2.3.1 (2026.03.17)<br>
+    - 버전: 2.3.1 (2026.03.18)<br>
     - 개발: lottoria<br>
     - special thanks to [haruka12, pucca2816]<br>
     - 문의: trsketch@gmail.com<br>

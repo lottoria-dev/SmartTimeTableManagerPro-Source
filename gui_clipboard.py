@@ -1,5 +1,5 @@
 import config
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QMessageBox
 from PySide6.QtCore import QMimeData
 
 class ClipboardManager:
@@ -23,6 +23,15 @@ class ClipboardManager:
                     headers.append(f"{day}{p}")
             
             classes = self.mw.logic.get_all_sorted_classes()
+            
+            # [수정] "변경된 항목만 보기" 활성화 시 필터링 적용
+            if hasattr(self.mw, 'chk_only_changed') and self.mw.chk_only_changed.isChecked():
+                changed_set = self.mw.grid_renderer.get_changed_classes()
+                classes = [cls for cls in classes if (str(cls[0]), str(cls[1])) in changed_set]
+                if not classes:
+                    QMessageBox.warning(self.mw, "알림", "복사할 변경된 학급 데이터가 없습니다.")
+                    return
+
             for g, c in classes:
                 row_items = [f"{g}-{c}"]
                 for day in config.DAYS:
@@ -63,6 +72,15 @@ class ClipboardManager:
                     headers.append(f"{day}{p}")
             
             teachers = self.mw.logic.get_all_teachers_sorted_by_subject()
+            
+            # [수정] "변경된 항목만 보기" 활성화 시 필터링 적용
+            if hasattr(self.mw, 'chk_only_changed') and self.mw.chk_only_changed.isChecked():
+                changed_set = self.mw.grid_renderer.get_changed_teachers()
+                teachers = [t for t in teachers if t in changed_set]
+                if not teachers:
+                    QMessageBox.warning(self.mw, "알림", "복사할 변경된 교사 데이터가 없습니다.")
+                    return
+
             for teacher in teachers:
                 subj = self.mw.logic.get_teacher_primary_subject(teacher)
                 row_items = [f"{teacher} ({subj})" if subj else teacher]
@@ -150,3 +168,10 @@ class ClipboardManager:
         
         self.mw.status_bar.setText("📋 복사 완료 (엑셀 날짜 변환 방지 적용)")
         self.mw.status_bar.setStyleSheet("color: #6366f1; font-weight: bold; padding-left: 10px; font-size: 11px;")
+        
+        # [수정] 복사 완료 안내 팝업창 띄우기
+        QMessageBox.information(
+            self.mw, 
+            "복사 완료", 
+            "현재 화면의 데이터가 클립보드에 복사되었습니다.\n원하는 곳(엑셀, 한글 등)에 붙여넣기(Ctrl+V) 하세요."
+        )

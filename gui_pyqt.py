@@ -132,11 +132,11 @@ class TimetableWindow(QMainWindow):
         self.mode_btn_group.buttonClicked.connect(self.on_mode_change)
 
         modes = [
-            ("👁️ 조회모드", "VIEW", False),
-            ("🔄 맞교환모드", "SWAP", False),
-            ("🛠️ 보강모드", "COVER", False),
-            ("🔗 연쇄모드", "CHAIN", False),
-            ("🤖 AI자동", "CHAIN", True)
+            ("조회모드", "VIEW", False),
+            ("맞교환모드", "SWAP", False),
+            ("보강모드", "COVER", False),
+            ("연쇄모드", "CHAIN", False),
+            ("AI자동", "CHAIN", True)
         ]
         
         for text, val, use_ai in modes:
@@ -228,7 +228,7 @@ class TimetableWindow(QMainWindow):
         self.selector_layout.setContentsMargins(0, 0, 0, 0)
         option_layout.addWidget(self.selector_stack)
         
-        self.chk_only_changed = QCheckBox("🔄 변경된 항목만 보기")
+        self.chk_only_changed = QCheckBox("변경된 항목만 보기")
         self.chk_only_changed.stateChanged.connect(self.refresh_grid)
         self.chk_only_changed.setStyleSheet("""
             QCheckBox {
