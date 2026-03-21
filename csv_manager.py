@@ -166,6 +166,19 @@ class CSVManager:
                         pass
                     i += 1
                     continue
+                
+                # [추가] 잠금 데이터 복구
+                elif cell_val == "#METADATA_LOCKED_v1" and len(row) > 1:
+                    try:
+                        encoded_str = row[1]
+                        json_str = base64.b64decode(encoded_str).decode('utf-8')
+                        locked_list = json.loads(json_str)
+                        # JSON으로 불러온 리스트를 (grade, class, day, period) 튜플 형태로 변환하여 세트에 저장
+                        logic_instance.locked_cells = set(tuple(item) for item in locked_list)
+                    except Exception:
+                        pass
+                    i += 1
+                    continue
 
                 # 학반 정보 파싱 및 행 타입 결정
                 grade, cls = None, None
@@ -175,11 +188,13 @@ class CSVManager:
                 val_col0 = str(row[0]).strip()
                 val_col1 = str(row[1]).strip() if len(row) > 1 else ""
                 
-                # 패턴 1: "1-1" 형식 (분리형 또는 저장본일 확률 높음)
-                match_combined = re.match(r'(\d+)\s*-\s*(\d+)', val_col0)
+                # 패턴 1: "1-1", "1/1", "1. 1.", "1월 1일"(엑셀 날짜 자동변환 완벽 복구)
+                match_combined = re.match(r'0?(\d+)\s*(?:-|/|\.|학년\s*|월\s*)\s*0?(\d+)(?:\s*반|\s*일|\.)?', val_col0)
                 
                 if match_combined:
-                    grade, cls = match_combined.groups()
+                    raw_g, raw_c = match_combined.groups()
+                    grade = str(int(raw_g)) # '01'월 같은 형태를 '1'로 정규화
+                    cls = str(int(raw_c))
                     current_grade = grade # 학년 컨텍스트 업데이트
                     
                     # 다음 행 확인 로직 (분리형 여부 판단)
@@ -280,6 +295,7 @@ class CSVManager:
                 # Data Rows (Sorted by Grade, Class)
                 classes = logic_instance.get_all_sorted_classes()
                 for g, c in classes:
+                    # 기존 시스템 및 파일과의 호환성을 위해 '1-1' 구조로 원복
                     row_subj = [f"{g}-{c}"]
                     row_teach = [""]
                     
@@ -310,6 +326,16 @@ class CSVManager:
                         writer.writerow(["#METADATA_ORIGINAL_v1", encoded_str])
                     except Exception as e:
                         print(f"메타데이터 저장 실패: {e}")
+
+                # [추가] 잠금 데이터 저장
+                if logic_instance.locked_cells:
+                    try:
+                        locked_list = list(logic_instance.locked_cells)
+                        json_str = json.dumps(locked_list, ensure_ascii=False)
+                        encoded_str = base64.b64encode(json_str.encode('utf-8')).decode('utf-8')
+                        writer.writerow(["#METADATA_LOCKED_v1", encoded_str])
+                    except Exception as e:
+                        print(f"잠금 데이터 저장 실패: {e}")
 
             return True, "파일 저장이 완료되었습니다."
         except Exception as e:

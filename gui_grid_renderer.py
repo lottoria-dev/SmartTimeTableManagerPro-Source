@@ -151,8 +151,6 @@ class GridRenderer:
         if data:
             if self.mw.view_mode in ["TEACHER", "ALL_TEACHER"]:
                 main_text, sub_text = data['subject'], f"{grade}-{cls}"
-            elif self.mw.view_mode == "ALL_DAY":
-                main_text = f"{data['subject']} ({teacher_name})"
             else:
                 main_text, sub_text = data['subject'], teacher_name
 
@@ -225,6 +223,8 @@ class GridRenderer:
         self._update_single_cell(cell, key)
         cell.clicked.connect(self.mw.interaction_handler.handle_cell_click)
         cell.right_clicked.connect(self.mw.interaction_handler.handle_right_click)
+        # [업데이트] 드롭 시그널 연결
+        cell.cell_dropped.connect(self.mw.interaction_handler.handle_cell_drop)
         self.mw.grid_layout.addWidget(cell, r, c, rowspan, colspan)
         self.mw.cell_widget_map[key] = cell
 
@@ -272,10 +272,12 @@ class GridRenderer:
                 if day != config.DAYS[-1]: col += 1
 
     def render_all_teacher(self):
-        self.add_header("교사(교과)", 0, 0)
-        self.mw.grid_layout.setColumnMinimumWidth(0, 95)
+        self.add_header("교사(주교과, 시수)", 0, 0)
+        self.mw.grid_layout.setColumnMinimumWidth(0, 105) # 가로 폭 살짝 넓힘 (시수 표시용)
         
-        teachers = self.mw.logic.get_all_teachers_sorted_by_subject()
+        # [수정] 사용자가 선택한 정렬 방식 적용
+        sort_mode = getattr(self.mw, 'teacher_sort_mode', "과목순")
+        teachers = self.mw.logic.get_sorted_teachers(sort_mode)
         
         if hasattr(self.mw, 'chk_only_changed') and self.mw.chk_only_changed.isChecked():
             changed_set = self.get_changed_teachers()
@@ -307,7 +309,14 @@ class GridRenderer:
         for r, teacher in enumerate(teachers):
             row = r + 1
             subj = self.mw.logic.get_teacher_primary_subject(teacher)
-            display_text = f"{teacher}\n({subj})" if subj else teacher
+            count = self.mw.logic.get_teacher_class_count(teacher)
+            
+            # [수정] 교사 이름, 과목명, 그리고 총 수업 시수 함께 표시
+            if subj:
+                display_text = f"{teacher}\n({subj}, {count}h)"
+            else:
+                display_text = f"{teacher}\n({count}h)"
+                
             self.add_header(display_text, row, 0)
             
             col = 1
@@ -319,6 +328,8 @@ class GridRenderer:
                     self._update_single_cell(cell, key)
                     cell.clicked.connect(self.mw.interaction_handler.handle_cell_click)
                     cell.right_clicked.connect(self.mw.interaction_handler.handle_right_click)
+                    # [업데이트] 교사 뷰에서도 드롭 시그널 연결
+                    cell.cell_dropped.connect(self.mw.interaction_handler.handle_cell_drop)
                     self.mw.grid_layout.addWidget(cell, row, col)
                     self.mw.cell_widget_map[key] = cell
                     col += 1

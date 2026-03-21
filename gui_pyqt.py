@@ -10,14 +10,15 @@ from PySide6.QtWidgets import (
     QDialog, QTextEdit, QLayout
 )
 from PySide6.QtCore import Qt, Signal, QSize, QMimeData 
-from PySide6.QtGui import QFont, QColor, QPalette, QIcon, QKeyEvent, QCloseEvent
+from PySide6.QtGui import QFont, QColor, QPalette, QIcon, QKeyEvent, QCloseEvent, QShortcut, QKeySequence
 
 import config
 from logic import TimetableLogic
 from ai_mover import AIChainedMover
 
 from gui_styles import STYLE_SHEET, COLORS
-from gui_components import HelpDialog, ClickableFrame, LogDialog
+from gui_components import HelpDialog, ClickableFrame, LogDialog, DayRoutineDialog
+
 
 # [리팩토링] 분리된 매니저 클래스들 임포트
 from gui_clipboard import ClipboardManager
@@ -27,7 +28,7 @@ from gui_grid_renderer import GridRenderer
 class TimetableWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Smart Timetable Manager Pro v2.3.1")
+        self.setWindowTitle("Smart Timetable Manager Pro v2.5.1")
         self.resize(1520, 750)
         
         self.force_light_palette()
@@ -41,6 +42,7 @@ class TimetableWindow(QMainWindow):
         self.view_mode = "ALL_WEEK"
         self.work_mode = "VIEW"
         self.use_ai_mode = False
+        self.teacher_sort_mode = "과목순" # 교사 전체 보기의 정렬 모드 초기값
         
         self.swap_source = None
         self.swap_candidates = []
@@ -59,6 +61,36 @@ class TimetableWindow(QMainWindow):
         self.grid_renderer = GridRenderer(self)
 
         self.init_ui()
+        self.init_shortcuts() # [업데이트] 단축키 초기화
+
+    def init_shortcuts(self):
+        """파워 유저를 위한 키보드 단축키 매핑"""
+        # 파이썬 가비지 컬렉터(GC)에 의해 단축키 객체가 삭제되는 것을 방지하기 위해 참조 보존
+        self._shortcuts = [] 
+        
+        mapping = [
+            ("Ctrl+O", self.load_csv),
+            ("Ctrl+S", self.save_csv),
+            ("Ctrl+Z", self.undo_action),
+            ("Ctrl+C", self.copy_to_clipboard),
+            ("Esc", self.cancel_action),
+            ("1", lambda: self.set_mode_by_index(0)),
+            ("2", lambda: self.set_mode_by_index(1)),
+            ("3", lambda: self.set_mode_by_index(2)),
+            ("4", lambda: self.set_mode_by_index(3)),
+            ("5", lambda: self.set_mode_by_index(4))
+        ]
+        
+        for key_str, func in mapping:
+            shortcut = QShortcut(QKeySequence(key_str), self)
+            shortcut.activated.connect(func)
+            self._shortcuts.append(shortcut)
+            
+    def set_mode_by_index(self, idx):
+        buttons = self.mode_btn_group.buttons()
+        if 0 <= idx < len(buttons):
+            buttons[idx].setChecked(True)
+            self.on_mode_change(buttons[idx])
 
     def force_light_palette(self):
         palette = QPalette()
@@ -183,6 +215,11 @@ class TimetableWindow(QMainWindow):
         btn_log.clicked.connect(self.show_log_dialog)
         top_layout.addWidget(btn_log)
 
+        # [추가] 요일변경 버튼
+        btn_day_change = QPushButton("🔄 요일변경")
+        btn_day_change.clicked.connect(self.change_day_routine)
+        top_layout.addWidget(btn_day_change)
+
         btn_reset = QPushButton("초기화")
         btn_reset.clicked.connect(self.reset_all)
         top_layout.addWidget(btn_reset)
@@ -286,15 +323,52 @@ class TimetableWindow(QMainWindow):
     def show_help(self):
         HelpDialog(self).exec()
 
+    # [개선] 요일 일과 전체 덮어쓰기 기능 (기초 시간표 적용 안내 추가)
+    def change_day_routine(self):
+        dialog = DayRoutineDialog(self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            src_day, tgt_day = dialog.get_days()
+            if src_day == tgt_day:
+                QMessageBox.warning(self, "오류", "같은 요일로는 변경할 수 없습니다.")
+                return
+            
+            reply = QMessageBox.question(
+                self, "일과 변경 확인",
+                f"[{tgt_day}요일]의 기존 시간표가 모두 삭제되고\n[{src_day}요일]의 '기초 시간표(결보강 제외)'로 덮어써집니다.\n\n"
+                f"※ {tgt_day}요일의 교시 수 또한 {src_day}요일에 맞춰집니다.\n계속하시겠습니까?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            )
+            
+            if reply == QMessageBox.StandardButton.Yes:
+                self.logic.apply_day_routine(src_day, tgt_day)
+                self.refresh_grid()
+                self.update_log_view()
+                self.status_bar.setText(f"🔄 {tgt_day}요일 일과가 {src_day}요일(기초 시간표)로 변경되었습니다.")
+                QMessageBox.information(self, "완료", f"{tgt_day}요일 일과 변경이 완료되었습니다.")
+
     # --- 기능 및 상태 관리 래퍼 (Wrapper) ---
     def load_csv(self):
         file_path, _ = QFileDialog.getOpenFileName(self, "CSV 파일 열기", "", "CSV Files (*.csv)")
         if not file_path: return
-        success, msg = self.logic.import_school_csv(file_path)
+        
+        # [업데이트] 파일 로드 중 모래시계 커서
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            success, msg = self.logic.import_school_csv(file_path)
+        finally:
+            QApplication.restoreOverrideCursor()
+            
         if success:
             self.status_bar.setText(f"✅ {msg}")
             self.status_bar.setStyleSheet("color: #10b981; font-weight: bold; padding-left: 10px; font-size: 11px;")
             self.view_mode = "ALL_WEEK"
+            
+            # [추가] 라디오 버튼 UI를 '주간 전체'로 자동 전환(시각적 동기화)
+            for btn in self.view_btn_group.buttons():
+                if btn.property("view_val") == "ALL_WEEK":
+                    btn.setChecked(True)
+                    break
+                    
             self.refresh_selectors()
             self.refresh_grid()
             self.update_log_view()
@@ -306,7 +380,14 @@ class TimetableWindow(QMainWindow):
         current_time = datetime.now().strftime("%y%m%d%H%M%S")
         file_path, _ = QFileDialog.getSaveFileName(self, "CSV 파일 저장", f"timetable-{current_time}.csv", "CSV Files (*.csv)")
         if not file_path: return
-        success, msg = self.logic.export_csv(file_path)
+        
+        # [업데이트] 파일 저장 중 모래시계 커서
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            success, msg = self.logic.export_csv(file_path)
+        finally:
+            QApplication.restoreOverrideCursor()
+            
         if success:
             self.status_bar.setText(f"💾 {msg}")
             QMessageBox.information(self, "완료", msg)
@@ -316,7 +397,7 @@ class TimetableWindow(QMainWindow):
     def undo_action(self):
         self.cancel_action()
         if self.logic.undo():
-            self.update_cell_visuals()
+            self.refresh_grid()
             self.update_log_view()
             self.status_bar.setText("↩ 실행 취소 완료")
         else:
@@ -327,16 +408,25 @@ class TimetableWindow(QMainWindow):
         self.swap_candidates = []
         self.selected_cell_info = None
         self.highlighted_teachers = {}
+        data_changed = False  # [개선] 데이터 변경 여부 플래그
+        
         if self.work_mode == "CHAIN" and self.chain_floating_data:
             data = self.chain_floating_data
             g, c = data['origin_gc']
             d, p = data['origin_time']
             if not self.logic.schedule[g][c][d].get(p):
                 self.logic.add_class(g, c, d, p, data['subject'], data['teacher'])
+                data_changed = True  # [개선] 원상복구로 인한 데이터 변경 발생
             self.chain_floating_data = None
+            
         self.combo_cover_teacher.clear()
         self.status_bar.setText("선택이 취소되었습니다.")
-        self.update_cell_visuals()
+        
+        # [개선] 변경 사항이 발생했고, 필터 토글이 켜져있다면 화면 새로고침 수행
+        if data_changed and hasattr(self, 'chk_only_changed') and self.chk_only_changed.isChecked():
+            self.refresh_grid()
+        else:
+            self.update_cell_visuals()
 
     def reset_all(self):
         if not self.logic.original_schedule: return
@@ -383,12 +473,29 @@ class TimetableWindow(QMainWindow):
     def refresh_selectors(self):
         for i in reversed(range(self.selector_layout.count())): 
             self.selector_layout.itemAt(i).widget().setParent(None)
+            
         if self.view_mode == "ALL_DAY":
             self.selector_layout.addWidget(QLabel("요일:"))
             self.combo_sel = QComboBox()
             self.combo_sel.addItems(config.DAYS)
             self.combo_sel.currentTextChanged.connect(self.refresh_grid)
             self.selector_layout.addWidget(self.combo_sel)
+            
+        elif self.view_mode == "ALL_TEACHER":
+            # [추가] 교사 전체 보기 시 정렬 옵션 콤보박스 추가
+            self.selector_layout.addWidget(QLabel("정렬:"))
+            self.combo_sel = QComboBox()
+            self.combo_sel.addItems(["과목순", "이름순", "시수 많은순", "시수 적은순"])
+            self.combo_sel.setCurrentText(self.teacher_sort_mode)
+            self.adjust_combo_width(self.combo_sel)
+            
+            def on_teacher_sort_change(text):
+                self.teacher_sort_mode = text
+                self.refresh_grid()
+                
+            self.combo_sel.currentTextChanged.connect(on_teacher_sort_change)
+            self.selector_layout.addWidget(self.combo_sel)
+
         elif self.view_mode == "SINGLE":
             self.selector_layout.addWidget(QLabel("학급:"))
             self.combo_sel = QComboBox()
@@ -397,6 +504,7 @@ class TimetableWindow(QMainWindow):
             self.adjust_combo_width(self.combo_sel)
             self.combo_sel.currentTextChanged.connect(self.refresh_grid)
             self.selector_layout.addWidget(self.combo_sel)
+            
         elif self.view_mode == "TEACHER":
             self.selector_layout.addWidget(QLabel("교사:"))
             self.combo_sel = QComboBox()
@@ -405,6 +513,7 @@ class TimetableWindow(QMainWindow):
             self.adjust_combo_width(self.combo_sel)
             self.combo_sel.currentTextChanged.connect(self.refresh_grid)
             self.selector_layout.addWidget(self.combo_sel)
+            
         elif self.view_mode == "SUBJECT":
             self.selector_layout.addWidget(QLabel("교과:"))
             self.combo_sel = QComboBox()
@@ -468,6 +577,9 @@ class TimetableWindow(QMainWindow):
     def copy_to_clipboard(self):
         self.clipboard_manager.copy_to_clipboard()
 
+    def copy_stats_to_clipboard(self):
+        self.clipboard_manager.copy_stats_to_clipboard()
+
     def refresh_grid(self, _=None):
         self.grid_renderer.refresh_grid(_)
 
@@ -475,4 +587,9 @@ class TimetableWindow(QMainWindow):
         self.grid_renderer.update_cell_visuals()
 
     def execute_cover(self):
+        # 1. 분리된 매니저에서 보강 로직(데이터 수정 등) 처리
         self.interaction_handler.execute_cover()
+        
+        # 2. [오류 수정 핵심] 변경된 교사 시수(ALL_TEACHER) 및 상태를 즉각 반영하기 위해 전체 그리드 새로고침
+        self.refresh_grid()
+        self.update_log_view()

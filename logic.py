@@ -92,7 +92,9 @@ class TimetableLogic:
             'all_teachers': copy.deepcopy(self.all_teachers),
             'change_logs': copy.deepcopy(self.change_logs),
             'locked_cells': copy.deepcopy(self.locked_cells),
-            'is_modified': self.is_modified
+            'is_modified': self.is_modified,
+            'original_schedule': copy.deepcopy(self.original_schedule),
+            'periods_per_day': copy.deepcopy(config.PERIODS_PER_DAY)
         }
         self.history_stack.append(snapshot)
         if len(self.history_stack) > 100:
@@ -110,6 +112,12 @@ class TimetableLogic:
         self.change_logs = last_state['change_logs']
         self.locked_cells = last_state['locked_cells']
         self.is_modified = last_state['is_modified']
+        
+        if 'original_schedule' in last_state:
+            self.original_schedule = last_state['original_schedule']
+        if 'periods_per_day' in last_state:
+            config.PERIODS_PER_DAY.update(last_state['periods_per_day'])
+            
         return True
 
     def is_changed(self, grade, cls, day, period):
@@ -221,7 +229,12 @@ class TimetableLogic:
                             "type": "보강/변경",
                             "class": f"{grade}-{cls}",
                             "desc": f"{o['day']}{o['period']}: {o['teacher']} → {c['teacher']} ({c['subject']})",
-                            "raw": None
+                            "raw": {
+                                'day': o['day'], 
+                                'period': o['period'], 
+                                'orig_teacher': o['teacher'], 
+                                'new_teacher': c['teacher']
+                            }
                         })
                         u_orig.pop(i)
                     else:
@@ -269,7 +282,11 @@ class TimetableLogic:
                             final_logs.append({
                                 "type": "교체",
                                 "class": log1['class'],
-                                "desc": f"{d1}{p1}({t1}) ↔ {d2}{p2}({t2})"
+                                "desc": f"{d1}{p1}({t1}) ↔ {d2}{p2}({t2})",
+                                "raw": {
+                                    'from': {'day': d1, 'period': p1, 'teacher': t1},
+                                    'to': {'day': d2, 'period': p2, 'teacher': t2}
+                                }
                             })
                             skip_indices.add(j)
                             matched = True
@@ -344,7 +361,7 @@ class TimetableLogic:
 
     def is_teacher_busy(self, teacher, day, period, ignore_grade=None, ignore_class=None):
         if not teacher: return False
-        locations = self.teachers_schedule[teacher][day][period]
+        locations = self.teachers_schedule.get(teacher, {}).get(day, {}).get(period, set())
         if not locations: return False
         
         count = 0
@@ -356,13 +373,11 @@ class TimetableLogic:
 
     def is_conflicted(self, teacher, day, period):
         if not teacher: return False
-        locations = self.teachers_schedule[teacher][day][period]
+        locations = self.teachers_schedule.get(teacher, {}).get(day, {}).get(period, set())
         return len(locations) > 1
 
     def get_busy_info(self, teacher, day, period):
-        if teacher in self.teachers_schedule:
-             return list(self.teachers_schedule[teacher][day][period])
-        return []
+        return list(self.teachers_schedule.get(teacher, {}).get(day, {}).get(period, set()))
 
     def check_consecutive_classes(self, teacher, day, target_period):
         if not teacher: return False
@@ -371,7 +386,7 @@ class TimetableLogic:
         is_busy_list = []
         for p in range(1, limit + 1):
             busy = False
-            if self.teachers_schedule[teacher][day][p]: 
+            if self.teachers_schedule.get(teacher, {}).get(day, {}).get(p, set()): 
                 busy = True
             if p == target_period:
                 busy = True
@@ -459,28 +474,97 @@ class TimetableLogic:
         
         self.is_modified = True
 
+    # --- [수정] update_teacher 메서드 복구 (보강 기능) ---
     def update_teacher(self, grade, cls, day, period, new_teacher):
         self.save_snapshot()
         
         grade, cls = str(grade), str(cls)
         period = int(period)
         
-        current_data = self.schedule[grade][cls][day].get(period)
-        old_teacher = current_data['teacher'] if current_data else "공강"
-        subject = current_data['subject'] if current_data else "보강"
+        old_data = self.schedule[grade][cls][day].get(period)
+        if not old_data: return False
         
-        log_msg = f"{day}{period}: {old_teacher} → {new_teacher}"
+        old_teacher = old_data['teacher']
+        subject = old_data['subject']
+        
+        # 1. 기존 교사의 스케줄에서 해당 수업 제거
+        if old_teacher and old_teacher in self.teachers_schedule:
+            if day in self.teachers_schedule[old_teacher] and period in self.teachers_schedule[old_teacher][day]:
+                self.teachers_schedule[old_teacher][day][period].discard((grade, cls))
+                if not self.teachers_schedule[old_teacher][day][period]:
+                    del self.teachers_schedule[old_teacher][day][period]
+                    
+        # 2. 새로운 교사로 데이터 업데이트
+        self.schedule[grade][cls][day][period]['teacher'] = new_teacher
+        
+        # 3. 새로운 교사의 스케줄에 추가
+        if new_teacher and self._is_valid_teacher_name(new_teacher):
+            self.teachers_schedule[new_teacher][day][period].add((grade, cls))
+            self.all_teachers.add(new_teacher)
+            
+        # 4. 수동 로그 추가 (get_diff_list()에서 자동 감지하지만 안전장치)
         self.change_logs.append({
-            "type": "보강",
+            "type": "보강/변경",
             "class": f"{grade}-{cls}",
-            "desc": log_msg,
+            "desc": f"{day}{period}: {old_teacher} → {new_teacher} ({subject})",
             "log_key": ("COVER", grade, cls, day, period)
         })
-
-        self.remove_class(grade, cls, day, period)
-        self.add_class(grade, cls, day, period, subject, new_teacher)
         
         self.is_modified = True
+        return True
+    # --------------------------------------------------------
+
+    # [개선] 특정 요일의 일과를 덮어쓸 때, 현재 변동 내역이 아닌 '기초 시간표'를 덮어쓰도록 구조 최적화
+    def apply_day_routine(self, source_day, target_day):
+        """특정 요일의 전체 일과를 다른 요일에 덮어씁니다. (학사일정 변경용)"""
+        self.save_snapshot()
+        
+        classes = self.get_all_sorted_classes()
+        
+        # 1. 대상 요일의 기존 수업을 모두 제거
+        for g, c in classes:
+            for p in range(1, config.MAX_PERIODS + 1):
+                if self.schedule[g][c][target_day].get(p):
+                    self.remove_class(g, c, target_day, p)
+                    
+        # 2. 원본 요일의 '기초 시간표(original_schedule)'를 대상 요일로 복사
+        for g, c in classes:
+            for p in range(1, config.MAX_PERIODS + 1):
+                # 기초 시간표가 존재하면 우선적으로 가져오기 (결보강 등 변동 내역 무시)
+                if self.original_schedule:
+                    data = self.original_schedule.get(g, {}).get(c, {}).get(source_day, {}).get(p)
+                else:
+                    data = self.schedule[g][c][source_day].get(p)
+                    
+                if data:
+                    self.add_class(g, c, target_day, p, data['subject'], data['teacher'])
+                    
+        # 3. 결보강 통계에서 제외하기 위해 original_schedule도 함께 업데이트
+        #    (학사일정 자체가 바뀐 것이므로 개별 결강/보강으로 처리하지 않음)
+        if self.original_schedule is not None:
+            for g, c in classes:
+                if target_day in self.original_schedule.get(g, {}).get(c, {}):
+                    self.original_schedule[g][c][target_day] = {}
+                
+                for p in range(1, config.MAX_PERIODS + 1):
+                    orig_data = self.original_schedule.get(g, {}).get(c, {}).get(source_day, {}).get(p)
+                    if orig_data:
+                        if g not in self.original_schedule: self.original_schedule[g] = {}
+                        if c not in self.original_schedule[g]: self.original_schedule[g][c] = {}
+                        if target_day not in self.original_schedule[g][c]: self.original_schedule[g][c][target_day] = {}
+                        self.original_schedule[g][c][target_day][p] = copy.deepcopy(orig_data)
+
+        # 4. 요일별 최대 교시 수 동기화 (예: 7교시인 화요일에 6교시인 월요일 덮어쓰면 화면에서도 6교시로 단축)
+        config.PERIODS_PER_DAY[target_day] = config.PERIODS_PER_DAY[source_day]
+
+        self.change_logs.append({
+            "type": "일과변경",
+            "class": "전체",
+            "desc": f"{source_day}요일 일과를 {target_day}요일로 변경 (통계 제외)",
+            "log_key": ("DAY_ROUTINE", source_day, target_day)
+        })
+        self.is_modified = True
+        return True
 
     def get_all_sorted_classes(self):
         classes = []
@@ -496,13 +580,11 @@ class TimetableLogic:
     def get_all_teachers_sorted(self):
         return sorted(list(self.all_teachers))
         
-# logic.py 내부 TimetableLogic 클래스 끝부분에 추가
-    
     def get_teacher_primary_subject(self, teacher):
         """교사의 주 담당 교과를 추출합니다."""
         subjects = []
         for day in self.teachers_schedule.get(teacher, {}):
-            for p in self.teachers_schedule[teacher][day]:
+            for p in self.teachers_schedule.get(teacher, {}).get(day, {}):
                 for g, c in self.teachers_schedule[teacher][day][p]:
                     data = self.schedule[str(g)][str(c)][day].get(p)
                     if data and data.get('subject'):
@@ -514,9 +596,27 @@ class TimetableLogic:
         from collections import Counter
         return Counter(subjects).most_common(1)[0][0]
 
-    def get_all_teachers_sorted_by_subject(self):
-        """유사 교과(주 담당 교과)를 기준으로 교사 목록을 정렬합니다."""
-        teachers = self.get_all_teachers_sorted()
-        # 1순위: 교과명(가나다순), 2순위: 교사명(가나다순)
-        teachers.sort(key=lambda t: (self.get_teacher_primary_subject(t), t))
-        return teachers        
+    def get_teacher_class_count(self, teacher):
+        """해당 교사의 주당 수업 시수를 계산합니다. (교시 수 기준)"""
+        count = 0
+        teacher_days = self.teachers_schedule.get(teacher, {})
+        for day, periods in teacher_days.items():
+            for p, classes in periods.items():
+                if classes:  # 실제 배정된 반(set)이 있는 경우만 카운트
+                    count += 1
+        return count
+
+    def get_sorted_teachers(self, sort_type="과목순"):
+        """사용자가 선택한 기준에 따라 교사 목록을 정렬하여 반환합니다."""
+        teachers = self.get_all_teachers_sorted() # 기본 이름 가나다순 정렬됨
+        
+        if sort_type == "이름순":
+            return teachers
+        elif sort_type == "과목순":
+            teachers.sort(key=lambda t: (self.get_teacher_primary_subject(t), t))
+        elif sort_type == "시수 많은순":
+            teachers.sort(key=lambda t: (-self.get_teacher_class_count(t), t))
+        elif sort_type == "시수 적은순":
+            teachers.sort(key=lambda t: (self.get_teacher_class_count(t), t))
+            
+        return teachers

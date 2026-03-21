@@ -65,13 +65,15 @@ class ClipboardManager:
                 data_rows.append(row_items)
         
         elif self.mw.view_mode == "ALL_TEACHER":
-            headers = ["교사(주교과)"]
+            headers = ["교사(주교과, 시수)"]
             for day in config.DAYS:
                 limit = config.PERIODS_PER_DAY[day]
                 for p in range(1, limit + 1):
                     headers.append(f"{day}{p}")
             
-            teachers = self.mw.logic.get_all_teachers_sorted_by_subject()
+            # [수정] 콤보박스에서 선택된 정렬 방식 적용
+            sort_mode = getattr(self.mw, 'teacher_sort_mode', "과목순")
+            teachers = self.mw.logic.get_sorted_teachers(sort_mode)
             
             # [수정] "변경된 항목만 보기" 활성화 시 필터링 적용
             if hasattr(self.mw, 'chk_only_changed') and self.mw.chk_only_changed.isChecked():
@@ -83,7 +85,14 @@ class ClipboardManager:
 
             for teacher in teachers:
                 subj = self.mw.logic.get_teacher_primary_subject(teacher)
-                row_items = [f"{teacher} ({subj})" if subj else teacher]
+                count = self.mw.logic.get_teacher_class_count(teacher)
+                
+                if subj:
+                    base_name = f"{teacher} ({subj}, {count}h)"
+                else:
+                    base_name = f"{teacher} ({count}h)"
+                    
+                row_items = [base_name]
                 for day in config.DAYS:
                     limit = config.PERIODS_PER_DAY[day]
                     for p in range(1, limit + 1):
@@ -174,4 +183,128 @@ class ClipboardManager:
             self.mw, 
             "복사 완료", 
             "현재 화면의 데이터가 클립보드에 복사되었습니다.\n원하는 곳(엑셀, 한글 등)에 붙여넣기(Ctrl+V) 하세요."
+        )
+
+    def copy_stats_to_clipboard(self):
+        logs = self.mw.logic.get_diff_list()
+        if not logs:
+            QMessageBox.information(self.mw, "알림", "변경된 시간표 내역이 없습니다.")
+            return
+
+        detail_headers = ["요일", "교시", "학반", "결강 교사(원수업)", "보강 교사(대체)", "변경 타입", "사유 및 비고"]
+        detail_rows = []
+        cover_stats = {}
+
+        for log in logs:
+            log_type = log.get('type', '')
+            cls_info = log.get('class', '')
+            raw = log.get('raw')
+
+            if log_type == "보강/변경" and raw:
+                day = raw.get('day', '')
+                period = f"{raw.get('period', '')}교시"
+                orig_t = raw.get('orig_teacher', '')
+                new_t = raw.get('new_teacher', '')
+                
+                detail_rows.append([day, period, cls_info, orig_t, new_t, "보강", ""])
+                cover_stats[new_t] = cover_stats.get(new_t, 0) + 1
+                
+            elif log_type == "교체" and raw:
+                f = raw.get('from', {})
+                t = raw.get('to', {})
+                day1, p1, t1 = f.get('day', ''), f"{f.get('period', '')}교시", f.get('teacher', '')
+                day2, p2, t2 = t.get('day', ''), f"{t.get('period', '')}교시", t.get('teacher', '')
+                
+                # 교체의 경우: 1번 위치에는 2번 교사가, 2번 위치에는 1번 교사가 들어감
+                detail_rows.append([day1, p1, cls_info, t1, t2, "교환", ""])
+                detail_rows.append([day2, p2, cls_info, t2, t1, "교환", ""])
+
+            elif log_type == "이동" and raw:
+                f_slot = raw.get('from', ('', ''))
+                t_slot = raw.get('to', ('', ''))
+                t_name = raw.get('teacher', '')
+                
+                day1, p1 = f_slot[0], f"{f_slot[1]}교시"
+                day2, p2 = t_slot[0], f"{t_slot[1]}교시"
+                
+                detail_rows.append([day1, p1, cls_info, t_name, t_name, "시간 변경", f"→ {day2} {p2} (으)로 이동"])
+                detail_rows.append([day2, p2, cls_info, t_name, t_name, "시간 변경", f"← {day1} {p1} 에서 이동"])
+
+        # 요일 및 교시 기준 정렬
+        day_order = {d: i for i, d in enumerate(config.DAYS)}
+        def sort_key(row):
+            d_idx = day_order.get(row[0], 99)
+            p_idx = int(row[1].replace("교시", "")) if row[1].replace("교시", "").isdigit() else 99
+            return (d_idx, p_idx, row[2])
+            
+        detail_rows.sort(key=sort_key)
+
+        html_parts = ['<meta charset="utf-8">']
+        tsv_lines = []
+
+        # --- Table 1: 상세 일지 ---
+        html_parts.append('<h3>1. 결보강 상세 일지 (결재용)</h3>')
+        html_parts.append('<table border="1" style="border-collapse: collapse; text-align: center;">')
+        html_parts.append('<thead><tr>')
+        for h in detail_headers:
+            html_parts.append(f'<th style="background-color: #f0f0f0; padding: 8px;">{h}</th>')
+        html_parts.append('</tr></thead><tbody>')
+
+        tsv_lines.append("1. 결보강 상세 일지 (결재용)")
+        tsv_lines.append("\t".join(detail_headers))
+
+        if not detail_rows:
+            detail_rows = [["-", "-", "-", "-", "-", "-", "변경 내역 없음"]]
+
+        for row in detail_rows:
+            html_parts.append('<tr>')
+            for cell in row:
+                safe_cell = str(cell).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                html_parts.append(f'<td style="mso-number-format:\'@\'; padding: 5px;">{safe_cell}</td>')
+            html_parts.append('</tr>')
+            tsv_lines.append("\t".join(row))
+
+        html_parts.append('</tbody></table><br><br>')
+        tsv_lines.append("")
+        tsv_lines.append("")
+
+        # --- Table 2: 통계 ---
+        stat_headers = ["교사명", "이번주 보강 시수 (단위: 시간)", "비고"]
+        html_parts.append('<h3>2. 교사별 보강 시수 통계 (수당 지급용)</h3>')
+        html_parts.append('<table border="1" style="border-collapse: collapse; text-align: center;">')
+        html_parts.append('<thead><tr>')
+        for h in stat_headers:
+            html_parts.append(f'<th style="background-color: #f0f0f0; padding: 8px;">{h}</th>')
+        html_parts.append('</tr></thead><tbody>')
+
+        tsv_lines.append("2. 교사별 보강 시수 통계 (수당 지급용)")
+        tsv_lines.append("\t".join(stat_headers))
+
+        stat_rows = []
+        for t, count in sorted(cover_stats.items(), key=lambda x: (-x[1], x[0])):
+            stat_rows.append([t, str(count), ""])
+            
+        if not stat_rows:
+            stat_rows = [["-", "0", "보강 내역 없음"]]
+
+        for row in stat_rows:
+            html_parts.append('<tr>')
+            for cell in row:
+                safe_cell = str(cell).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                html_parts.append(f'<td style="mso-number-format:\'@\'; padding: 5px;">{safe_cell}</td>')
+            html_parts.append('</tr>')
+            tsv_lines.append("\t".join(row))
+
+        html_parts.append('</tbody></table>')
+
+        mime_data = QMimeData()
+        mime_data.setText("\n".join(tsv_lines))
+        mime_data.setHtml("".join(html_parts))
+
+        QApplication.clipboard().setMimeData(mime_data)
+        
+        QMessageBox.information(
+            self.mw, 
+            "통계 복사 완료", 
+            "결보강 상세 일지 및 통계 데이터가 클립보드에 복사되었습니다.\n엑셀이나 한글 문서에 붙여넣기(Ctrl+V) 하세요."
         )

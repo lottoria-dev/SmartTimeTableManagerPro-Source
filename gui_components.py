@@ -1,14 +1,15 @@
 from PySide6.QtWidgets import (
-    QDialog, QVBoxLayout, QTextEdit, QTextBrowser, QPushButton, QFrame, 
-    QLabel, QSizePolicy, QTreeWidget, QTreeWidgetItem
+    QDialog, QVBoxLayout, QHBoxLayout, QTextEdit, QTextBrowser, QPushButton, QFrame, 
+    QLabel, QSizePolicy, QTreeWidget, QTreeWidgetItem, QComboBox, QApplication
 )
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QMimeData
+from PySide6.QtGui import QDrag
 
 class HelpDialog(QDialog):
     """도움말 팝업창"""
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("사용법 안내 - v2.3.1")
+        self.setWindowTitle("사용법 안내 - v2.5.1")
         self.resize(650, 600)
         self.setStyleSheet("background-color: white; color: #333333;")
         
@@ -21,7 +22,7 @@ class HelpDialog(QDialog):
         
         # [수정] 개발자 정보에 lottoria 적용
         help_content = """
-<h2>📖 스마트 시간표 매니저(SmartTimetableManagerPro) v2.3.1</h2>
+<h2>📖 스마트 시간표 매니저(SmartTimetableManagerPro) v2.5.1</h2>
 <hr>
 <h3>1. 기본 사용법</h3>
 <ul>
@@ -47,29 +48,34 @@ class HelpDialog(QDialog):
     </li>
     <li><b>맞교환 모드:</b> 
         <ul>
-            <li>바꿀 두 수업을 차례로 클릭합니다. <b>(다른 요일 간 이동 가능)</b></li>
+            <li>바꿀 두 수업을 차례로 클릭하거나 <b>드래그 앤 드롭</b>합니다.</li>
             <li>첫 번째 선택 시 이동 가능 시간은 <span style="color:green; font-weight:bold;">초록색</span>, 충돌 예상 시간은 <span style="color:red; font-weight:bold;">분홍색</span>으로 표시됩니다.</li>
         </ul>
     </li>
     <li><b>보강 모드:</b> 결강 수업 선택 → 상단 메뉴에서 대체 교사 선택 → <b>'배정'</b> 클릭.</li>
     <li><b>연쇄 이동 모드 (CHAIN):</b> 
         <ul>
-            <li>수업을 빈 공간이나 다른 수업 자리로 이동시킵니다. <b>(다른 요일로 이동 가능)</b></li>
+            <li>수업을 빈 공간이나 다른 수업 자리로 클릭하거나 <b>드래그 앤 드롭</b>하여 이동시킵니다.</li>
             <li>밀려난 수업을 계속해서 이동시키며 연쇄적으로 정리합니다.</li>
         </ul>
     </li>
     <li><b>AI 자동 모드:</b> 
         <ul>
             <li><span style="color:red; font-weight:bold;">※ AI 모드는 같은 요일 내에서만 이동이 가능합니다.</span></li>
-            <li><b>[출발할 수업]</b>과 <b>[도착할 시간]</b>을 클릭하면, AI가 최적의 이동 경로를 찾아 자동 재배치합니다.</li>
+            <li><b>[출발할 수업]</b>과 <b>[도착할 시간]</b>을 클릭하거나 <b>드래그 앤 드롭</b>하면, AI가 최적의 이동 경로를 찾아 자동 재배치합니다.</li>
         </ul>
     </li>
 </ul>
 
 <hr>
 <div style="font-size: 10pt; color: #555; line-height: 1.4;">
+    <b>■ 단축키 안내</b><br>
+    - [Ctrl + O] 불러오기 / [Ctrl + S] 저장<br>
+    - [Ctrl + Z] 실행취소 / [Ctrl + C] 클립보드 복사<br>
+    - [1 ~ 5] 모드 빠른 전환<br>
+    <br>
     <b>■ 개발자 정보</b><br>
-    - 버전: 2.3.1 (2026.03.18)<br>
+    - 버전: 2.5.1 (2026.03.21)<br>
     - 개발: lottoria<br>
     - special thanks to [haruka12, pucca2816]<br>
     - 문의: trsketch@gmail.com<br>
@@ -89,7 +95,7 @@ class HelpDialog(QDialog):
         layout.addWidget(btn_close)
 
 class LogDialog(QDialog):
-    """[v1.2.1] 변경 내역을 보여주는 별도 팝업창"""
+    """변경 내역을 보여주는 별도 팝업창"""
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("변경 내역 (Log)")
@@ -107,13 +113,29 @@ class LogDialog(QDialog):
         self.tree_widget.setStyleSheet("color: #1f2937;")
         layout.addWidget(self.tree_widget)
         
+        btn_layout = QHBoxLayout()
+        
+        self.btn_copy_stats = QPushButton("📊 결보강 통계 엑셀 복사")
+        self.btn_copy_stats.clicked.connect(self.copy_stats)
+        self.btn_copy_stats.setStyleSheet("""
+            QPushButton { background-color: #10b981; color: white; border-radius: 5px; padding: 6px; font-weight: bold; }
+            QPushButton:hover { background-color: #059669; }
+        """)
+        btn_layout.addWidget(self.btn_copy_stats)
+
         btn_close = QPushButton("닫기")
         btn_close.clicked.connect(self.accept)
         btn_close.setStyleSheet("""
             QPushButton { background-color: #6b7280; color: white; border-radius: 5px; padding: 6px; }
             QPushButton:hover { background-color: #4b5563; }
         """)
-        layout.addWidget(btn_close)
+        btn_layout.addWidget(btn_close)
+        
+        layout.addLayout(btn_layout)
+
+    def copy_stats(self):
+        if self.parent() and hasattr(self.parent(), 'copy_stats_to_clipboard'):
+            self.parent().copy_stats_to_clipboard()
 
     def update_logs(self, logs):
         self.tree_widget.clear()
@@ -126,17 +148,20 @@ class LogDialog(QDialog):
             last_item = self.tree_widget.topLevelItem(self.tree_widget.topLevelItemCount() - 1)
             self.tree_widget.scrollToItem(last_item)
 
-
 class ClickableFrame(QFrame):
-    """클릭 이벤트를 처리하는 커스텀 프레임 (시간표 셀)"""
-    clicked = Signal(object) # pyqtSignal -> Signal
+    """클릭 및 드래그 앤 드롭 이벤트를 처리하는 커스텀 프레임 (시간표 셀)"""
+    clicked = Signal(object)
     right_clicked = Signal(object)
+    cell_dropped = Signal(object, object) # [업데이트] 드롭 시그널 (src_key, tgt_key)
 
     def __init__(self, data_key, parent=None):
         super().__init__(parent)
         self.data_key = data_key
         self.setFrameStyle(QFrame.Shape.StyledPanel)
         self.setObjectName("Cell")
+        
+        self.setAcceptDrops(True) # [업데이트] 드롭 허용
+        self.drag_start_position = None
         
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.MinimumExpanding)
         self.setMinimumHeight(30)
@@ -163,9 +188,49 @@ class ClickableFrame(QFrame):
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
-            self.clicked.emit(self.data_key)
+            self.drag_start_position = event.pos() # [업데이트] 드래그 시작점 저장
+            self.clicked.emit(self.data_key) # 기존 클릭 처리도 수행하여 선택 상태 반영
         elif event.button() == Qt.MouseButton.RightButton:
             self.right_clicked.emit(self.data_key)
+
+    # [업데이트] 마우스 이동 감지하여 드래그 앤 드롭 시작
+    def mouseMoveEvent(self, event):
+        if not (event.buttons() & Qt.MouseButton.LeftButton): return
+        if not self.drag_start_position: return
+        
+        # 드래그 시작 임계값 확인
+        if (event.pos() - self.drag_start_position).manhattanLength() < QApplication.startDragDistance():
+            return
+            
+        drag = QDrag(self)
+        mime_data = QMimeData()
+        
+        # 키를 문자열로 직렬화하여 전송
+        key_str = "|".join(map(str, self.data_key))
+        mime_data.setText(key_str)
+        drag.setMimeData(mime_data)
+        
+        # 드래그 실행 (커서는 시스템 기본 이동 아이콘으로 변경됨)
+        drag.exec(Qt.DropAction.MoveAction)
+
+    # [업데이트] 드롭 이벤트 처리 허용
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasText():
+            event.acceptProposedAction()
+
+    # [업데이트] 드롭 발생 시 목적지 데이터 파싱 및 시그널 에밋
+    def dropEvent(self, event):
+        src_key_str = event.mimeData().text()
+        src_parts = src_key_str.split('|')
+        
+        # 직렬화된 키 복원
+        if src_parts[0] == "TEACHER_VIEW":
+            src_key = ("TEACHER_VIEW", src_parts[1], src_parts[2], int(src_parts[3]))
+        else:
+            src_key = (src_parts[0], src_parts[1], src_parts[2], int(src_parts[3]))
+            
+        self.cell_dropped.emit(src_key, self.data_key)
+        event.acceptProposedAction()
 
     def set_content(self, main_text, sub_text, bg_color, border_color=None, border_width=1, text_color=None):
         self.lbl_main.setText(main_text)
@@ -195,3 +260,60 @@ class ClickableFrame(QFrame):
         """
 
         self.setStyleSheet(f"QFrame#Cell {{ {base_style} }} {hover_style}")
+        
+class DayRoutineDialog(QDialog):
+    """요일 전체 일과를 덮어쓰는 기능 팝업창"""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("요일 일과 변경")
+        self.resize(350, 160)
+        self.setStyleSheet("background-color: white; color: #333333;")
+        
+        layout = QVBoxLayout(self)
+        
+        lbl_info = QLabel("특정 요일의 전체 시간표를 다른 요일에 덮어씁니다.\n(학사일정 변경 전용 - 개별 결보강 통계에서 제외됨)")
+        lbl_info.setStyleSheet("color: #4b5563; font-size: 10pt; margin-bottom: 10px; font-weight: bold;")
+        layout.addWidget(lbl_info)
+        
+        form_layout = QHBoxLayout()
+        
+        self.combo_src = QComboBox()
+        self.combo_src.addItems(["월", "화", "수", "목", "금"])
+        
+        lbl_arrow = QLabel(" ➔ ")
+        lbl_arrow.setStyleSheet("font-weight: bold; color: #3b82f6;")
+        
+        self.combo_tgt = QComboBox()
+        self.combo_tgt.addItems(["월", "화", "수", "목", "금"])
+        
+        form_layout.addWidget(QLabel("가져올 일과:"))
+        form_layout.addWidget(self.combo_src)
+        form_layout.addWidget(lbl_arrow)
+        form_layout.addWidget(QLabel("덮어쓸 요일:"))
+        form_layout.addWidget(self.combo_tgt)
+        
+        layout.addLayout(form_layout)
+        
+        btn_layout = QHBoxLayout()
+        btn_apply = QPushButton("적용하기")
+        btn_apply.setStyleSheet("""
+            QPushButton { background-color: #ef4444; color: white; font-weight: bold; padding: 6px; border-radius: 4px; }
+            QPushButton:hover { background-color: #dc2626; }
+        """)
+        btn_apply.clicked.connect(self.accept)
+        
+        btn_cancel = QPushButton("취소")
+        btn_cancel.setStyleSheet("""
+            QPushButton { background-color: #e5e7eb; color: #374151; padding: 6px; border-radius: 4px; }
+            QPushButton:hover { background-color: #d1d5db; }
+        """)
+        btn_cancel.clicked.connect(self.reject)
+        
+        btn_layout.addWidget(btn_cancel)
+        btn_layout.addWidget(btn_apply)
+        
+        layout.addStretch()
+        layout.addLayout(btn_layout)
+        
+    def get_days(self):
+        return self.combo_src.currentText(), self.combo_tgt.currentText()
