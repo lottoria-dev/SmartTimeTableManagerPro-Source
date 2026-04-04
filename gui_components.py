@@ -9,7 +9,7 @@ class HelpDialog(QDialog):
     """도움말 팝업창"""
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("사용법 안내 - v2.5.1")
+        self.setWindowTitle("사용법 안내 - v2.6.1")
         self.resize(650, 600)
         self.setStyleSheet("background-color: white; color: #333333;")
         
@@ -22,7 +22,7 @@ class HelpDialog(QDialog):
         
         # [수정] 개발자 정보에 lottoria 적용
         help_content = """
-<h2>📖 스마트 시간표 매니저(SmartTimetableManagerPro) v2.5.1</h2>
+<h2>📖 스마트 시간표 매니저(SmartTimetableManagerPro) v2.6.1</h2>
 <hr>
 <h3>1. 기본 사용법</h3>
 <ul>
@@ -75,10 +75,10 @@ class HelpDialog(QDialog):
     - [1 ~ 5] 모드 빠른 전환<br>
     <br>
     <b>■ 개발자 정보</b><br>
-    - 버전: 2.5.1 (2026.03.21)<br>
-    - 개발: lottoria<br>
+    - 버전: 2.6.1<br>
+    - 최종 업데이트: 2026.04.04.<br>
     - special thanks to [haruka12, pucca2816]<br>
-    - 문의: trsketch@gmail.com<br>
+    - 문의: mathtime.ai@gmail.com<br>
     - 정식 배포 페이지를 제외한 곳에서 임의의 수정 및 재배포를 금지합니다.<br>
     © Copyright 2026 lottoria-dev. All rights reserved.
 </div>

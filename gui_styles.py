@@ -208,6 +208,17 @@ QFrame#Cell {
     padding: 0px;
     margin: 0px;
 }
+
+/* [추가] 툴팁 UI 세련되게 설정 */
+QToolTip {
+    background-color: #1e293b;
+    color: #f8fafc;
+    border: 1px solid #475569;
+    border-radius: 4px;
+    padding: 8px;
+    font-family: 'Malgun Gothic';
+    font-size: 12px;
+}
 """
 
 COLORS = {

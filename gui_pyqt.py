@@ -28,7 +28,7 @@ from gui_grid_renderer import GridRenderer
 class TimetableWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Smart Timetable Manager Pro v2.5.1")
+        self.setWindowTitle("Smart Timetable Manager Pro v2.6.1")
         self.resize(1520, 750)
         
         self.force_light_palette()

@@ -15,6 +15,10 @@ class TimetableLogic:
         self.all_teachers = set()
         self.original_schedule = None
         
+        # [패치] 초기화(Reset) 시 완벽 복구를 위한 절대 원본 데이터
+        self.initial_schedule = None
+        self.initial_periods_per_day = None
+        
         # 로그 및 실행 취소 관리
         self.change_logs = []
         self.history_stack = [] 
@@ -34,6 +38,8 @@ class TimetableLogic:
         self.teachers_schedule.clear()
         self.all_teachers.clear()
         self.original_schedule = None
+        self.initial_schedule = None
+        self.initial_periods_per_day = None
         self.change_logs = []
         self.history_stack = []
         self.locked_cells.clear()
@@ -55,17 +61,28 @@ class TimetableLogic:
 
     def restore_original_state(self):
         """CSV 로드 직후 상태로 복구"""
-        if self.original_schedule is None:
+        # [핵심 패치] 초기화(Reset) 자체를 실행 취소(Undo) 할 수 있도록 현재 상태를 스냅샷에 저장
+        self.save_snapshot()
+
+        # [핵심 패치] 저장된 파일을 불러온 경우 initial_schedule이 없을 수 있으므로 예외처리 강화
+        if self.initial_schedule is not None:
+            # 1-A. 요일 변경을 거친 경우: 절대 원본(initial_schedule)으로 스케줄과 요일 설정을 덮어씀
+            self.schedule = copy.deepcopy(self.initial_schedule)
+            self.original_schedule = copy.deepcopy(self.initial_schedule)
+            if self.initial_periods_per_day:
+                config.PERIODS_PER_DAY.update(self.initial_periods_per_day)
+        elif self.original_schedule is not None:
+            # 1-B. 요일 변경 없이 저장된 파일 로드 후 일반적인 수업 변동만 초기화할 때
+            self.schedule = copy.deepcopy(self.original_schedule)
+        else:
             return False
-        
-        # 1. 스케줄 원복
-        self.schedule = copy.deepcopy(self.original_schedule)
         
         # 2. 파생 데이터(교사 스케줄 등) 재구축
         self.teachers_schedule.clear()
         self.all_teachers.clear()
         self.change_logs = []
-        self.history_stack = [] 
+        # 초기화 시 히스토리는 유지하여 Undo를 통해 복구 가능하도록 변경
+        # self.history_stack = []  <- 삭제
         self.locked_cells.clear() 
         
         for grade, g_data in self.schedule.items():
@@ -83,6 +100,8 @@ class TimetableLogic:
     def _set_original_state(self):
         """현재 상태를 원본 상태로 설정 (CSV 로드 직후 호출됨)"""
         self.original_schedule = copy.deepcopy(self.schedule)
+        self.initial_schedule = copy.deepcopy(self.schedule)
+        self.initial_periods_per_day = copy.deepcopy(config.PERIODS_PER_DAY)
 
     def save_snapshot(self):
         """현재 상태를 히스토리 스택에 저장합니다."""
@@ -474,7 +493,6 @@ class TimetableLogic:
         
         self.is_modified = True
 
-    # --- [수정] update_teacher 메서드 복구 (보강 기능) ---
     def update_teacher(self, grade, cls, day, period, new_teacher):
         self.save_snapshot()
         
@@ -512,12 +530,15 @@ class TimetableLogic:
         
         self.is_modified = True
         return True
-    # --------------------------------------------------------
 
-    # [개선] 특정 요일의 일과를 덮어쓸 때, 현재 변동 내역이 아닌 '기초 시간표'를 덮어쓰도록 구조 최적화
     def apply_day_routine(self, source_day, target_day):
         """특정 요일의 전체 일과를 다른 요일에 덮어씁니다. (학사일정 변경용)"""
         self.save_snapshot()
+        
+        # [패치] 초기화를 위한 지연 백업 (저장된 파일을 로드한 직후 요일 변경 시 동작)
+        if self.initial_schedule is None:
+            self.initial_schedule = copy.deepcopy(self.original_schedule if self.original_schedule else self.schedule)
+            self.initial_periods_per_day = copy.deepcopy(config.PERIODS_PER_DAY)
         
         classes = self.get_all_sorted_classes()
         
@@ -527,7 +548,12 @@ class TimetableLogic:
                 if self.schedule[g][c][target_day].get(p):
                     self.remove_class(g, c, target_day, p)
                     
-        # 2. 원본 요일의 '기초 시간표(original_schedule)'를 대상 요일로 복사
+        # [패치] 대상 요일(target_day)의 잠금 상태(Lock) 초기화 (새로운 잠금 상태로 덮어쓰기 위해)
+        keys_to_remove = [k for k in self.locked_cells if k[2] == target_day]
+        for k in keys_to_remove:
+            self.locked_cells.remove(k)
+                    
+        # 2. 원본 요일의 '기초 시간표(original_schedule)'를 대상 요일로 복사 및 잠금 상태 복사
         for g, c in classes:
             for p in range(1, config.MAX_PERIODS + 1):
                 # 기초 시간표가 존재하면 우선적으로 가져오기 (결보강 등 변동 내역 무시)
@@ -538,6 +564,9 @@ class TimetableLogic:
                     
                 if data:
                     self.add_class(g, c, target_day, p, data['subject'], data['teacher'])
+                    # [추가] 원본 요일의 잠금 상태가 있다면 대상 요일에도 설정
+                    if self.is_locked(g, c, source_day, p):
+                        self.locked_cells.add((str(g), str(c), target_day, int(p)))
                     
         # 3. 결보강 통계에서 제외하기 위해 original_schedule도 함께 업데이트
         #    (학사일정 자체가 바뀐 것이므로 개별 결강/보강으로 처리하지 않음)
@@ -620,3 +649,73 @@ class TimetableLogic:
             teachers.sort(key=lambda t: (self.get_teacher_class_count(t), t))
             
         return teachers
+
+    # --- [추가] 툴팁용 셀 변동 상세 내역 조회 ---
+    def get_cell_change_details(self, grade, cls, day, period):
+        """특정 셀의 상세 변동 내역(툴팁용)을 문자열로 반환합니다."""
+        if not self.original_schedule:
+            return None
+            
+        grade, cls = str(grade), str(cls)
+        period = int(period)
+        
+        if not self.is_changed(grade, cls, day, period):
+            return None
+            
+        logs = self.get_diff_list() # 이미 만들어둔 정교한 로그 리스트 활용
+        target_class = f"{grade}-{cls}"
+        
+        details = [f"💡 [{day} {period}교시 변동 상세 내역]"]
+        
+        orig_data = self.original_schedule.get(grade, {}).get(cls, {}).get(day, {}).get(period)
+        curr_data = self.schedule.get(grade, {}).get(cls, {}).get(day, {}).get(period)
+        
+        # 기본 기존/현재 정보 표시
+        orig_txt = f"{orig_data['subject']}({orig_data['teacher']})" if orig_data and orig_data.get('teacher') else "빈 교시"
+        curr_txt = f"{curr_data['subject']}({curr_data['teacher']})" if curr_data and curr_data.get('teacher') else "빈 교시"
+        
+        details.append(f"• 기존: {orig_txt}")
+        details.append(f"• 현재: {curr_txt}")
+        details.append("-" * 30)
+        
+        found = False
+        # 로그를 순회하며 해당 시간과 연관된 이동, 교체, 보강 내역을 추적
+        for log in logs:
+            if log.get('class') != target_class:
+                continue
+                
+            raw = log.get('raw')
+            log_type = log.get('type')
+            
+            if log_type == "교체" and raw:
+                f = raw.get('from', {})
+                t = raw.get('to', {})
+                if (f.get('day') == day and f.get('period') == period) or \
+                   (t.get('day') == day and t.get('period') == period):
+                    details.append(f"🔄 [맞교환] {log.get('desc')}")
+                    found = True
+                    
+            elif log_type == "이동" and raw:
+                f = raw.get('from') 
+                t = raw.get('to')   
+                if f[0] == day and f[1] == period:
+                    details.append(f"📤 [보냄] {log.get('desc')}")
+                    found = True
+                elif t[0] == day and t[1] == period:
+                    details.append(f"📥 [받음] {log.get('desc')}")
+                    found = True
+                    
+            elif log_type == "보강/변경" and raw:
+                if raw.get('day') == day and raw.get('period') == period:
+                    details.append(f"👤 [보강] {log.get('desc')}")
+                    found = True
+                    
+            elif log_type in ["삭제", "추가"]:
+                if log.get('desc', '').startswith(f"{day}{period}:"):
+                    details.append(f"📝 [{log_type}] {log.get('desc')}")
+                    found = True
+
+        if not found:
+            details.append("※ 복합적인 다중 이동으로 상세 추적이 어렵습니다.")
+            
+        return "\n".join(details)

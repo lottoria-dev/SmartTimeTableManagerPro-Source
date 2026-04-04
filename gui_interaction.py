@@ -1,11 +1,32 @@
-from PySide6.QtWidgets import QMessageBox, QApplication
-from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QMessageBox, QApplication, QToolTip
+from PySide6.QtGui import QCursor
+from PySide6.QtCore import Qt, QRect
 from gui_styles import COLORS
 
 class CellInteractionHandler:
     """그리드 셀 클릭 및 작업 모드별 비즈니스 로직을 분리한 클래스"""
     def __init__(self, main_window):
         self.mw = main_window
+        
+        # [패치] 연쇄 이동 중 취소/모드 전환 시 데이터 증발 방지 및 완벽한 트랜잭션 롤백 강제화
+        self._original_cancel_action = self.mw.cancel_action
+        self.mw.cancel_action = self._safe_cancel_action
+
+    def _safe_cancel_action(self):
+        """안전한 취소 처리. 공중에 뜬 데이터가 있으면 연쇄 이동 시작 전으로 한 번에 롤백합니다."""
+        if self.mw.work_mode == "CHAIN" and getattr(self.mw, 'chain_floating_data', None):
+            self.mw.logic.undo()
+            self.mw.chain_floating_data = None
+            self.mw.status_bar.setText("⚠️ 이동이 취소되어 시작 전 상태로 완벽히 복구되었습니다.")
+            self.mw.update_log_view()
+            
+            if hasattr(self.mw, 'chk_only_changed') and self.mw.chk_only_changed.isChecked():
+                self.mw.refresh_grid()
+            else:
+                self.mw.update_cell_visuals()
+                
+        # 메인 윈도우의 원래 취소 로직 실행 (단, chain_floating_data가 None이 되었으므로 내부 불완전 복구는 스킵됨)
+        self._original_cancel_action()
 
     def handle_cell_click(self, key):
         data_changed = False 
@@ -41,6 +62,12 @@ class CellInteractionHandler:
             is_locked = "🔒 " if self.mw.logic.is_locked(grade, cls, day, period) else ""
             msg = f"{is_locked}선택: {clicked_teacher} ({cell_data['subject']})" if clicked_teacher else "빈 교시"
             self.mw.status_bar.setText(msg)
+            
+            # [수정] 툴팁 대신 팝업창(QMessageBox)을 띄워 마우스 움직임과 무관하게 여유롭게 읽을 수 있도록 개선
+            if self.mw.logic.is_changed(grade, cls, day, period):
+                details = self.mw.logic.get_cell_change_details(grade, cls, day, period)
+                if details:
+                    QMessageBox.information(self.mw, f"{grade}-{cls} {day} {period}교시 상세 변동 내역", details)
             
         elif self.mw.work_mode == "SWAP":
             if self.mw.logic.is_locked(grade, cls, day, period):
@@ -157,7 +184,7 @@ class CellInteractionHandler:
             else:
                 if not self.mw.chain_floating_data:
                     if not cell_data: return
-                    self.mw.logic.save_snapshot()
+                    self.mw.logic.save_snapshot() # 첫 연쇄 이동 시작에만 백업
                     self.mw.chain_floating_data = cell_data.copy()
                     self.mw.chain_floating_data['origin_gc'] = (grade, cls)
                     self.mw.chain_floating_data['origin_time'] = (day, period)
@@ -181,7 +208,7 @@ class CellInteractionHandler:
                             return 
 
                     target_old_data = self.mw.logic.schedule[grade][cls][day].get(period)
-                    self.mw.logic.save_snapshot()
+                    # [개선] 연쇄 이동을 완벽한 단일 트랜잭션으로 묶기 위해 중간에 스냅샷을 찍지 않음
                     self.mw.logic.add_class(grade, cls, day, period, floater['subject'], floater['teacher'])
                     data_changed = True  
                     self.mw.logic.change_logs.append({

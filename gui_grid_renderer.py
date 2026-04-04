@@ -208,10 +208,12 @@ class GridRenderer:
 
         cell.set_content(main_text, sub_text, bg_color, border_color, border_width, text_color)
 
-    def add_header(self, text, r, c, rowspan=1, colspan=1):
+    # [수정] font_size 파라미터를 추가하여 특정 헤더의 텍스트 크기를 조절할 수 있도록 개선
+    def add_header(self, text, r, c, rowspan=1, colspan=1, font_size=None):
         lbl = QLabel(text)
         lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        lbl.setStyleSheet("background-color: #e5e7eb; font-weight: bold; border: 1px solid #d1d5db; color: #1f2937;")
+        font_style = f"font-size: {font_size};" if font_size else ""
+        lbl.setStyleSheet(f"background-color: #e5e7eb; font-weight: bold; border: 1px solid #d1d5db; color: #1f2937; {font_style}")
         lbl.setMinimumHeight(26)
         if len(text) > 4: lbl.setMinimumWidth(80) 
         else: lbl.setMinimumWidth(40)
@@ -272,8 +274,10 @@ class GridRenderer:
                 if day != config.DAYS[-1]: col += 1
 
     def render_all_teacher(self):
-        self.add_header("교사(주교과, 시수)", 0, 0)
-        self.mw.grid_layout.setColumnMinimumWidth(0, 105) # 가로 폭 살짝 넓힘 (시수 표시용)
+        # [수정] 폰트 사이즈를 9pt로 줄이고, 제목 텍스트 간소화
+        self.add_header("교사(과목,시수)", 0, 0, font_size="9pt")
+        # [수정] 한 줄로 표시하기 위해 가로 폭을 충분히 넓힘 (105 -> 120)
+        self.mw.grid_layout.setColumnMinimumWidth(0, 120) 
         
         # [수정] 사용자가 선택한 정렬 방식 적용
         sort_mode = getattr(self.mw, 'teacher_sort_mode', "과목순")
@@ -311,13 +315,14 @@ class GridRenderer:
             subj = self.mw.logic.get_teacher_primary_subject(teacher)
             count = self.mw.logic.get_teacher_class_count(teacher)
             
-            # [수정] 교사 이름, 과목명, 그리고 총 수업 시수 함께 표시
+            # [수정] 개행문자(\n)를 제거하여 한 줄로 표시 (셀 높이 축소를 통해 표시 가능 행 수 증가)
             if subj:
-                display_text = f"{teacher}\n({subj}, {count}h)"
+                display_text = f"{teacher} ({subj},{count}h)"
             else:
-                display_text = f"{teacher}\n({count}h)"
+                display_text = f"{teacher} ({count}h)"
                 
-            self.add_header(display_text, row, 0)
+            # [수정] 폰트 크기를 1포인트(10pt -> 9pt) 줄임
+            self.add_header(display_text, row, 0, font_size="9pt")
             
             col = 1
             for day in config.DAYS:
