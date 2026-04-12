@@ -4,36 +4,23 @@ import config
 
 class AIChainedMover:
     def __init__(self, logic_instance):
-        """
-        :param logic_instance: TimetableLogic 클래스의 인스턴스 (데이터 접근 및 수정용)
-        """
         self.logic = logic_instance
-        self.max_steps = 200  # 연쇄 이동 제한 횟수
+        self.max_steps = 200
 
     def try_ai_move(self, start_grade, start_cls, start_day, start_period, target_day, target_period):
-        """
-        사용자가 요청한 초기 이동을 시작으로 AI가 연쇄 이동을 시도합니다.
-        성공 시 True, 실패(횟수 초과/해법 없음) 시 롤백 후 False를 반환합니다.
-        """
-        # [중요] AI 동작 전 상태 저장 (Atomic Undo를 위해 전체를 하나의 트랜잭션으로 취급)
         self.logic.save_snapshot()
         
-        # 1. 실패 시 복구를 위한 백업 (트랜잭션 시작 - 로직 내부 Undo가 아니라 예외 처리용)
         backup_schedule = copy.deepcopy(self.logic.schedule)
         backup_teachers = copy.deepcopy(self.logic.teachers_schedule)
         backup_logs = copy.deepcopy(self.logic.change_logs)
         backup_all_teachers = copy.deepcopy(self.logic.all_teachers)
         
-        # 2. 초기 데이터 준비
         start_data = self.logic.schedule[str(start_grade)][str(start_cls)][start_day].get(int(start_period))
         if not start_data:
             self.logic.history_stack.pop() 
             return False, "이동할 수업이 없습니다.", []
 
-        # 작업 큐
         queue = deque()
-        
-        # 첫 번째 이동 명령
         queue.append({
             'grade': str(start_grade), 'cls': str(start_cls),
             'subject': start_data['subject'], 'teacher': start_data['teacher'],
@@ -43,8 +30,6 @@ class AIChainedMover:
 
         logs = []
         steps = 0
-        
-        # 이번 연쇄 이동에서 '새로 배정된' 위치들을 기록하여 원위치 복귀 현상을 방지
         protected_slots = set()
 
         try:
@@ -60,18 +45,27 @@ class AIChainedMover:
                 if task.get('target_day') and task.get('target_period'):
                     t_day, t_period = task['target_day'], task['target_period']
                     
-                    # 1. 목표 위치가 잠겨있는지 확인
+                    # [신규] 행사 제외 학년인지 확인하여 차단
+                    if self.logic.is_excluded(g, t_day):
+                        raise Exception(f"{g}학년은 {t_day}요일에 제외 처리(행사 등)되어 있어 이동할 수 없습니다.")
+                    
                     if self.logic.is_locked(g, c, t_day, t_period):
                         raise Exception(f"{g}-{c} {t_day}{t_period} 교시는 잠겨있어 이동할 수 없습니다.")
 
                     if task.get('source_day'):
                         self.logic.remove_class(g, c, task['source_day'], task['source_period'])
 
-                    # 2. 해당 시간대에 교사가 다른 반 수업이 있는데, 그 수업이 잠겨있는지 확인
                     busy_locations = self.logic.get_busy_info(teacher, t_day, t_period)
+                    valid_busy_locations = []
+                    
                     for other_g, other_c in busy_locations:
+                        # [수정] 충돌 교사의 다른 반이 제외 학년이면 충돌(밀어내기) 대상에서 제외함 (중복 허용)
+                        if self.logic.is_excluded(other_g, t_day):
+                            continue
+                            
                         if self.logic.is_locked(other_g, other_c, t_day, t_period):
                              raise Exception(f"{teacher} 교사는 {other_g}-{other_c} {t_day}{t_period} 수업이 고정(잠금)되어 있어 중복 배정할 수 없습니다.")
+                        valid_busy_locations.append((other_g, other_c))
 
                     existing_data = self.logic.schedule[g][c][t_day].get(t_period)
                     if existing_data:
@@ -84,12 +78,10 @@ class AIChainedMover:
                         logs.append(f"[{steps}단계] {g}-{c} {t_day}{t_period} 기존 수업({existing_data['teacher']}) 밀려남")
 
                     self.logic.add_class(g, c, t_day, t_period, subj, teacher)
-                    
-                    # 방금 배정되었으므로, 이번 체인 내에서 다시 밀어내기 금지
                     protected_slots.add((g, c, t_day, t_period))
                     
-                    if len(busy_locations) >= 1: 
-                        for other_g, other_c in busy_locations:
+                    if len(valid_busy_locations) >= 1: 
+                        for other_g, other_c in valid_busy_locations:
                             if (str(other_g), str(other_c)) == (str(g), str(c)):
                                 continue
                             
@@ -118,15 +110,13 @@ class AIChainedMover:
                     })
 
             self.logic.change_logs.append({
-                "type": "AI이동",
-                "class": f"{start_grade}-{start_cls}",
+                "type": "AI이동", "class": f"{start_grade}-{start_cls}",
                 "desc": f"AI 자동 연쇄 이동 ({steps}단계 완료)",
                 "log_key": ("AI_MOVE", start_grade, start_cls)
             })
             return True, f"AI 자동 이동 완료 ({steps}회 연쇄)", logs
 
         except Exception as e:
-            # 실패 시 즉시 롤백
             self.logic.schedule = backup_schedule
             self.logic.teachers_schedule = backup_teachers
             self.logic.change_logs = backup_logs
@@ -141,33 +131,31 @@ class AIChainedMover:
         if protected_slots is None: protected_slots = set()
         limit = config.PERIODS_PER_DAY[target_day]
         
-        # [우선순위 1] 완전 무결한 빈 자리 (빈 자리이면서 3연강 X)
+        # [신규] 해당 학년이 이 요일에 제외되었다면 빈자리 검색 즉시 실패
+        if self.logic.is_excluded(grade, target_day):
+            return None, None
+        
         for p in range(1, limit + 1):
-            if not self.logic.schedule[grade][cls][target_day].get(p): # 빈 자리
-                if not self.logic.is_teacher_busy(teacher, target_day, p): # 교사 공강
-                    if not self.logic.check_consecutive_classes(teacher, target_day, p): # 3연강 아님
+            if not self.logic.schedule[grade][cls][target_day].get(p):
+                if not self.logic.is_teacher_busy(teacher, target_day, p):
+                    if not self.logic.check_consecutive_classes(teacher, target_day, p):
                         return target_day, p
 
-        # [우선순위 2] 기존 수업이 있지만(밀어내기), 교사 공강이며 3연강이 안 되는 자리
         for p in range(1, limit + 1):
-            if (grade, cls, target_day, p) in protected_slots:
-                continue
-            if self.logic.schedule[grade][cls][target_day].get(p): # 기존 수업 있음
-                if not self.logic.is_locked(grade, cls, target_day, p): # 잠기지 않음
-                    if not self.logic.is_teacher_busy(teacher, target_day, p): # 교사 공강
-                        if not self.logic.check_consecutive_classes(teacher, target_day, p): # 3연강 아님
+            if (grade, cls, target_day, p) in protected_slots: continue
+            if self.logic.schedule[grade][cls][target_day].get(p):
+                if not self.logic.is_locked(grade, cls, target_day, p):
+                    if not self.logic.is_teacher_busy(teacher, target_day, p):
+                        if not self.logic.check_consecutive_classes(teacher, target_day, p):
                             return target_day, p
 
-        # [우선순위 3] 3연강이지만 일단 빈 자리
         for p in range(1, limit + 1):
              if not self.logic.schedule[grade][cls][target_day].get(p):
                 if not self.logic.is_teacher_busy(teacher, target_day, p):
                     return target_day, p
         
-        # [우선순위 4] 기존 수업이 있지만 교사는 가능한 시간 (밀어내기 시 3연강 발생)
         for p in range(1, limit + 1):
-             if (grade, cls, target_day, p) in protected_slots:
-                 continue
+             if (grade, cls, target_day, p) in protected_slots: continue
              if not self.logic.is_locked(grade, cls, target_day, p):
                  if not self.logic.is_teacher_busy(teacher, target_day, p):
                      return target_day, p

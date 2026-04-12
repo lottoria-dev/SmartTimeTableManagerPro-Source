@@ -3,6 +3,8 @@ import re
 import base64
 import json
 import traceback
+import copy
+from collections import defaultdict
 import config
 
 class CSVManager:
@@ -14,20 +16,24 @@ class CSVManager:
     def __init__(self):
         pass
 
+    def _extract_grade_class(self, val):
+        """다양한 형식의 학반 문자열에서 학년과 반을 추출합니다."""
+        val = str(val).strip()
+        m = re.match(r'(\d+)월\s*(\d+)일', val)
+        if m:
+            return m.group(1).lstrip('0'), m.group(2).lstrip('0')
+        m = re.match(r'(\d+)[-\.학년\s]+(\d+)반?', val)
+        if m:
+            return m.group(1), m.group(2)
+        return None, None
+
     def _parse_headers_and_map(self, rows_subset):
-        """
-        상위 행들을 분석하여 컬럼 매핑 정보를 생성하고 config를 업데이트합니다.
-        
-        Returns:
-            col_map (dict): {column_index: (day, period)}
-        """
         col_map = {}
         temp_periods = {day: 0 for day in config.DAYS}
         
-        # 패턴: "월1", "화2" 등 요일+숫자 조합
-        pattern_combined = re.compile(f"({'|'.join(config.DAYS)})(\\d+)")
+        day_pattern_list = getattr(config, 'BASE_DAYS', []) + config.DAYS
+        pattern_combined = re.compile(rf"({'|'.join(day_pattern_list)})(\s*)(\d+)")
         
-        # 1. [우선순위 1] 단일 행 헤더 분석 (저장된 파일 형식: "월1", "화1"...)
         for i, row in enumerate(rows_subset):
             matches_count = 0
             temp_map = {}
@@ -35,299 +41,300 @@ class CSVManager:
             
             for j, cell in enumerate(row):
                 val = str(cell).strip()
-                # "월1" 같은 패턴 매칭
-                m = pattern_combined.match(val)
+                m = pattern_combined.search(val)
                 if m:
-                    d, p = m.group(1), int(m.group(2))
-                    temp_map[j] = (d, p)
-                    if p > local_max_periods[d]: local_max_periods[d] = p
-                    matches_count += 1
-            
-            # 유효한 헤더로 판단되면 (예: 3개 이상의 매칭이 한 행에 존재)
-            if matches_count >= 3:
-                # Config 업데이트
-                current_max = max(local_max_periods.values()) if local_max_periods else 0
-                if current_max > 0:
-                    config.PERIODS_PER_DAY.update(local_max_periods)
-                    config.MAX_PERIODS = current_max
-                return temp_map
-
-        # 2. [우선순위 2] 분리형 헤더 분석 (1행: "월", 2행: "1") - 기존 원본 파일 형식
-        day_row_idx = -1
-        day_cols = {} # {day: (start_col, end_col)}
-        
-        # 요일 헤더 찾기
-        for i, row in enumerate(rows_subset):
-            found_days = []
-            for j, cell in enumerate(row):
-                val = str(cell).strip()
-                if val in config.DAYS:
-                    found_days.append((val, j))
-            
-            if found_days:
-                day_row_idx = i
-                # 요일별 컬럼 범위 추정
-                sorted_days = sorted(found_days, key=lambda x: x[1])
-                for k, (day, start_col) in enumerate(sorted_days):
-                    if k + 1 < len(sorted_days):
-                        end_col = sorted_days[k+1][1]
-                    else:
-                        end_col = len(row) # 마지막 요일은 끝까지
-                    day_cols[day] = (start_col, end_col)
+                    day = m.group(1)
+                    period = int(m.group(3))
+                    
+                    if day in getattr(config, 'BASE_DAYS', []):
+                        day = f"1주 {day}"
+                        
+                    if day in temp_periods:
+                        temp_map[j] = (day, period)
+                        if period > local_max_periods[day]:
+                            local_max_periods[day] = period
+                        matches_count += 1
+                    
+            if matches_count > len(config.DAYS) / 2: 
+                col_map = temp_map
+                for d, p in local_max_periods.items():
+                    if p > temp_periods[d]:
+                        temp_periods[d] = p
                 break
-        
-        # 요일 헤더를 찾았다면, 그 아래에서 교시(숫자) 찾기
-        if day_row_idx != -1:
-            period_row_idx = day_row_idx + 1
-            if period_row_idx < len(rows_subset):
-                row = rows_subset[period_row_idx]
-                for day, (start, end) in day_cols.items():
-                    for c in range(start, end):
-                        if c < len(row):
-                            val = str(row[c]).strip()
-                            if val.isdigit():
-                                p = int(val)
-                                col_map[c] = (day, p)
-                                if p > temp_periods[day]: temp_periods[day] = p
-        
-            # Config 업데이트
-            current_max = max(temp_periods.values()) if temp_periods else 0
-            if current_max > 0:
-                config.PERIODS_PER_DAY.update(temp_periods)
-                config.MAX_PERIODS = current_max
-            
-            return col_map
+                
+        if not col_map:
+            day_map = {}
+            for j, cell in enumerate(rows_subset[0]):
+                val = str(cell).strip()
+                day_str = val.replace("요일", "").strip()
+                
+                if day_str in getattr(config, 'BASE_DAYS', []):
+                    day_str = f"1주 {day_str}"
+                    
+                if day_str in config.DAYS:
+                    day_map[j] = day_str
+                    
+            if day_map and len(rows_subset) > 1:
+                for j, cell in enumerate(rows_subset[1]):
+                    val = str(cell).strip()
+                    if val.isdigit():
+                        period = int(val)
+                        day_str = None
+                        for k in range(j, -1, -1):
+                            if k in day_map:
+                                day_str = day_map[k]
+                                break
+                        if day_str:
+                            col_map[j] = (day_str, period)
+                            if period > temp_periods.get(day_str, 0):
+                                temp_periods[day_str] = period
 
-        return {} # 매핑 실패
-
-    def _deserialize_original_schedule(self, json_str):
-        """JSON 문자열을 파싱하여 원본 스케줄 딕셔너리로 반환"""
-        from collections import defaultdict
-        data = json.loads(json_str)
-        
-        restored_schedule = defaultdict(lambda: defaultdict(lambda: defaultdict(dict)))
-        
-        for grade, g_data in data.items():
-            for cls, c_data in g_data.items():
-                for day, d_data in c_data.items():
-                    for period_str, info in d_data.items():
-                        restored_schedule[grade][cls][day][int(period_str)] = info
-        return restored_schedule
+        return col_map, temp_periods
 
     def load_csv(self, file_path, logic_instance):
-        """
-        CSV 파일을 읽어 logic_instance에 데이터를 채웁니다.
-        지원 형식:
-        1. 분리형: 학반(1-1) | 과목 행 \n (빈칸) | 교사 행
-        2. 병합형: 학년 | 반 | "과목\n교사" 셀 (학년이 병합되어 빈칸인 경우 처리)
-        3. 저장본: 학반(1-1) | "월1", "월2"... 헤더
-        """
-        logic_instance.reset_data()
         try:
-            # 파일 인코딩 확인 및 읽기
-            encodings = ['utf-8-sig', 'cp949', 'euc-kr']
-            rows = []
-            for enc in encodings:
-                try:
-                    with open(file_path, 'r', encoding=enc) as f:
-                        reader = csv.reader(f)
-                        rows = list(reader)
-                    break
-                except UnicodeDecodeError:
-                    continue
-            
-            if not rows: return False, "파일을 읽을 수 없습니다. (인코딩 오류)"
+            try:
+                with open(file_path, 'r', encoding='utf-8-sig') as f:
+                    content = f.read()
+            except UnicodeDecodeError:
+                with open(file_path, 'r', encoding='cp949') as f:
+                    content = f.read()
+                    
+            reader = list(csv.reader(content.splitlines()))
 
-            # 헤더 분석 및 컬럼 매핑 생성
-            col_map = self._parse_headers_and_map(rows[:10])
+            if not reader:
+                return False, "파일이 비어있습니다."
+
+            header_rows = reader[:3]
+            col_map, parsed_periods = self._parse_headers_and_map(header_rows)
+
             if not col_map:
-                 return False, "요일/교시 헤더를 찾을 수 없습니다. (올바른 시간표 양식이 아닙니다)"
+                return False, "시간표 형식을 인식할 수 없습니다. 열 제목(요일/교시)을 확인해주세요."
 
-            count = 0
-            imported_original_json_str = None
-            current_grade = None # [수정] 병합된 학년 셀 처리를 위한 상태 변수
-            
-            i = 0
-            while i < len(rows):
-                row = rows[i]
-                if not row:
-                    i += 1
-                    continue
-                
-                cell_val = str(row[0]).strip()
-                
-                # 메타데이터 처리
-                if cell_val == "#METADATA_ORIGINAL_v1" and len(row) > 1:
-                    try:
-                        encoded_str = row[1]
-                        json_str = base64.b64decode(encoded_str).decode('utf-8')
-                        imported_original_json_str = json_str
-                    except Exception:
-                        pass
-                    i += 1
-                    continue
-                
-                # [추가] 잠금 데이터 복구
-                elif cell_val == "#METADATA_LOCKED_v1" and len(row) > 1:
-                    try:
-                        encoded_str = row[1]
-                        json_str = base64.b64decode(encoded_str).decode('utf-8')
-                        locked_list = json.loads(json_str)
-                        # JSON으로 불러온 리스트를 (grade, class, day, period) 튜플 형태로 변환하여 세트에 저장
-                        logic_instance.locked_cells = set(tuple(item) for item in locked_list)
-                    except Exception:
-                        pass
-                    i += 1
-                    continue
+            logic_instance.reset_data()
+            config.PERIODS_PER_DAY.update(parsed_periods)
 
-                # 학반 정보 파싱 및 행 타입 결정
-                grade, cls = None, None
-                is_split_rows = False # True면 다음 행이 교사 행임
-                
-                # 열 데이터 추출
-                val_col0 = str(row[0]).strip()
-                val_col1 = str(row[1]).strip() if len(row) > 1 else ""
-                
-                # 패턴 1: "1-1", "1/1", "1. 1.", "1월 1일"(엑셀 날짜 자동변환 완벽 복구)
-                match_combined = re.match(r'0?(\d+)\s*(?:-|/|\.|학년\s*|월\s*)\s*0?(\d+)(?:\s*반|\s*일|\.)?', val_col0)
-                
-                if match_combined:
-                    raw_g, raw_c = match_combined.groups()
-                    grade = str(int(raw_g)) # '01'월 같은 형태를 '1'로 정규화
-                    cls = str(int(raw_c))
-                    current_grade = grade # 학년 컨텍스트 업데이트
-                    
-                    # 다음 행 확인 로직 (분리형 여부 판단)
-                    if i + 1 < len(rows) and str(rows[i+1][0]).strip() == "":
-                        is_split_rows = True
-                
-                # 패턴 2: 별도 컬럼 (병합형일 확률 높음) -> 0열:학년, 1열:반
-                elif val_col1.isdigit():
-                    # 반(Col 1) 정보가 숫자라면 데이터 행일 가능성 높음
-                    
-                    if val_col0.isdigit():
-                        # 학년이 명시된 경우 (예: 1반)
-                        current_grade = val_col0
-                        grade = current_grade
-                        cls = val_col1
-                        is_split_rows = False # 별도 컬럼형은 보통 병합셀 방식
-                        
-                    elif val_col0 == "" and current_grade is not None:
-                        # [핵심 수정] 학년이 비어있지만(병합됨) 이전 학년 정보가 있는 경우
-                        grade = current_grade
-                        cls = val_col1
-                        is_split_rows = False
-                
-                if grade and cls:
-                    subj_row = row
-                    teach_row = None
-                    
-                    if is_split_rows:
-                        if i + 1 < len(rows):
-                            teach_row = rows[i+1]
-                        i += 2
-                    else:
-                        i += 1
-                    
-                    # 데이터 추출
-                    for col_idx, (day, period) in col_map.items():
-                        subject = ""
-                        teacher = ""
-                        
-                        cell_text = ""
-                        if col_idx < len(subj_row):
-                            cell_text = str(subj_row[col_idx]).strip()
-                        
-                        if is_split_rows:
-                            # 분리형: 현재 행=과목, 다음 행=교사
-                            subject = cell_text
-                            if teach_row and col_idx < len(teach_row):
-                                teacher = str(teach_row[col_idx]).strip()
-                        else:
-                            # 병합형: 셀 안에 "과목\n교사" 또는 그냥 "과목"
-                            if '\n' in cell_text:
-                                parts = cell_text.split('\n', 1)
-                                subject = parts[0].strip()
-                                teacher = parts[1].strip()
-                            else:
-                                subject = cell_text
-                                # 교사가 없는 경우(자습 등)거나 과목만 있는 경우
-                        
-                        if subject or teacher:
-                            logic_instance.add_class(grade, cls, day, period, subject, teacher)
-                    count += 1
+            data_rows = []
+            metadata_original = None
+            metadata_locked = None
+            metadata_excluded = None
+
+            for row in reader:
+                if not row: continue
+                first_cell = str(row[0]).strip()
+                if first_cell == "#METADATA_ORIGINAL_v1":
+                    try:
+                        decoded = base64.b64decode(row[1]).decode('utf-8')
+                        metadata_original = json.loads(decoded)
+                    except: pass
+                elif first_cell == "#METADATA_LOCKED_v1":
+                    try:
+                        decoded = base64.b64decode(row[1]).decode('utf-8')
+                        metadata_locked = json.loads(decoded)
+                    except: pass
+                elif first_cell == "#METADATA_EXCLUDED_v1":
+                    try:
+                        decoded = base64.b64decode(row[1]).decode('utf-8')
+                        metadata_excluded = json.loads(decoded)
+                    except: pass
                 else:
+                    data_rows.append(row)
+
+            i = 0
+            while i < len(data_rows):
+                row = data_rows[i]
+                if len(row) < 2:
+                    i += 1
+                    continue
+
+                grade, cls = None, None
+                gc_match = self._extract_grade_class(row[0])
+                if gc_match[0]:
+                    grade, cls = gc_match
+                else:
+                    if str(row[0]).strip().isdigit() and str(row[1]).strip().isdigit():
+                        grade, cls = str(row[0]).strip(), str(row[1]).strip()
+
+                if not grade or not cls:
+                    i += 1
+                    continue
+
+                is_split = False
+                if i + 1 < len(data_rows):
+                    next_row = data_rows[i+1]
+                    if not str(next_row[0]).strip() or not self._extract_grade_class(next_row[0])[0]:
+                        teacher_count = sum(1 for j, _ in col_map.items() if j < len(next_row) and str(next_row[j]).strip())
+                        if teacher_count > 0:
+                            newline_count = sum(1 for j, _ in col_map.items() if j < len(row) and '\n' in str(row[j]))
+                            if newline_count < teacher_count:
+                                is_split = True
+
+                if is_split:
+                    subj_row = row
+                    teach_row = data_rows[i+1]
+                    for j, (day, period) in col_map.items():
+                        if j < len(subj_row) and j < len(teach_row):
+                            subj = str(subj_row[j]).strip()
+                            teach = str(teach_row[j]).strip()
+                            if subj and teach:
+                                logic_instance.add_class(grade, cls, day, period, subj, teach)
+                    i += 2
+                else:
+                    for j, (day, period) in col_map.items():
+                        if j < len(row):
+                            cell_val = str(row[j]).strip()
+                            if not cell_val: continue
+                            
+                            if '\n' in cell_val:
+                                parts = cell_val.split('\n')
+                                subj = parts[0].strip()
+                                teach = parts[1].strip() if len(parts) > 1 else ""
+                            else:
+                                parts = cell_val.rsplit(' ', 1)
+                                subj = parts[0].strip()
+                                teach = parts[1].strip() if len(parts) > 1 else ""
+                                
+                            if subj and teach:
+                                logic_instance.add_class(grade, cls, day, period, subj, teach)
                     i += 1
 
-            if count == 0: return False, "학반 정보(예: 1-1 또는 학년/반 열)를 찾을 수 없습니다."
-            
-            if imported_original_json_str:
-                try:
-                    restored_orig = self._deserialize_original_schedule(imported_original_json_str)
-                    logic_instance.original_schedule = restored_orig
-                except Exception:
-                    logic_instance._set_original_state()
+            has_w2 = any("2주" in d for d_dict in logic_instance.schedule.values() for c_dict in d_dict.values() for d in c_dict.keys())
+            if not has_w2:
+                if metadata_original:
+                    for g in list(metadata_original.keys()):
+                        for c in list(metadata_original[g].keys()):
+                            old_days = list(metadata_original[g][c].keys())
+                            for day in old_days:
+                                if day in getattr(config, 'BASE_DAYS', []):
+                                    metadata_original[g][c][f"1주 {day}"] = metadata_original[g][c].pop(day)
+
+                source_for_w2 = metadata_original if metadata_original else logic_instance.schedule
+                for g in list(logic_instance.schedule.keys()):
+                    for c in list(logic_instance.schedule[g].keys()):
+                        w1_days = [d for d in logic_instance.schedule[g][c].keys() if "1주" in d]
+                        for day in w1_days:
+                            w2_day = day.replace("1주", "2주")
+                            base_day_data = source_for_w2.get(str(g), {}).get(str(c), {}).get(day)
+                            if base_day_data is not None:
+                                # [핵심 수정] JSON에서 복사된 데이터일 경우 교시(period) 키가 문자열이므로 정수(int)로 변환
+                                converted_data = {int(k): copy.deepcopy(v) for k, v in base_day_data.items()}
+                                logic_instance.schedule[g][c][w2_day] = converted_data
+                            else:
+                                logic_instance.schedule[g][c][w2_day] = {}
+                
+                if metadata_original:
+                    for g in list(metadata_original.keys()):
+                        for c in list(metadata_original[g].keys()):
+                            for day in list(metadata_original[g][c].keys()):
+                                if "1주" in day:
+                                    w2_day = day.replace("1주", "2주")
+                                    metadata_original[g][c][w2_day] = copy.deepcopy(metadata_original[g][c][day])
+                
+                if metadata_locked:
+                    for item in metadata_locked:
+                        if len(item) >= 3 and item[2] in getattr(config, 'BASE_DAYS', []):
+                            item[2] = f"1주 {item[2]}"
+                    new_locks = []
+                    for item in metadata_locked:
+                        if len(item) == 4 and "1주" in item[2]:
+                            new_locks.append([item[0], item[1], item[2].replace("1주", "2주"), item[3]])
+                    metadata_locked.extend(new_locks)
+                
+                if metadata_excluded:
+                    old_keys = list(metadata_excluded.keys())
+                    for k in old_keys:
+                        if k in getattr(config, 'BASE_DAYS', []):
+                            metadata_excluded[f"1주 {k}"] = metadata_excluded.pop(k)
+                    new_excl = {}
+                    for k, v in metadata_excluded.items():
+                        new_excl[k] = v
+                        if "1주" in k:
+                            new_excl[k.replace("1주", "2주")] = v
+                    metadata_excluded = new_excl
+                    
+                for day in getattr(config, 'BASE_DAYS', []):
+                    config.PERIODS_PER_DAY[f"2주 {day}"] = config.PERIODS_PER_DAY.get(f"1주 {day}", 7)
+
+            if metadata_original:
+                restored_original = defaultdict(lambda: defaultdict(lambda: defaultdict(dict)))
+                for g, g_dict in metadata_original.items():
+                    for c, c_dict in g_dict.items():
+                        for day, d_dict in c_dict.items():
+                            for p, p_info in d_dict.items():
+                                restored_original[str(g)][str(c)][day][int(p)] = p_info
+                                
+                logic_instance.original_schedule = restored_original
+                logic_instance.initial_schedule = copy.deepcopy(restored_original)
+                logic_instance.initial_periods_per_day = copy.deepcopy(config.PERIODS_PER_DAY)
             else:
                 logic_instance._set_original_state()
+
+            if metadata_locked:
+                logic_instance.locked_cells = set(tuple(x) for x in metadata_locked)
                 
-            return True, f"총 {count}개 학급의 시간표를 불러왔습니다."
+            if metadata_excluded:
+                logic_instance.excluded_groups = {k: set(v) for k, v in metadata_excluded.items()}
+
+            for g, g_data in logic_instance.schedule.items():
+                for c, c_data in g_data.items():
+                    for d, d_data in c_data.items():
+                        for p, info in d_data.items():
+                            teacher = info.get('teacher')
+                            if teacher and logic_instance._is_valid_teacher_name(teacher):
+                                logic_instance.all_teachers.add(teacher)
+                                logic_instance.teachers_schedule[teacher][d][p].add((g, c))
+
+            return True, "파일 불러오기가 완료되었습니다."
         except Exception as e:
             traceback.print_exc()
-            return False, f"오류 발생: {str(e)}"
+            return False, f"파일 파싱 중 오류가 발생했습니다: {str(e)}"
 
     def save_csv(self, file_path, logic_instance):
-        """
-        현재 logic_instance의 상태를 CSV로 저장합니다.
-        (저장은 항상 호환성이 좋은 '분리형' 포맷을 사용합니다)
-        """
         try:
-            with open(file_path, 'w', newline='', encoding='utf-8-sig') as f:
+            with open(file_path, 'w', encoding='utf-8-sig', newline='') as f:
                 writer = csv.writer(f)
                 
-                # Header Generation
-                header = ["학반"]
-                for day in config.DAYS:
-                    limit = config.PERIODS_PER_DAY[day]
-                    for p in range(1, limit + 1):
-                        header.append(f"{day}{p}")
-                writer.writerow(header)
+                row1 = ["학반"]
+                row2 = [""]
                 
-                # Data Rows (Sorted by Grade, Class)
+                for day in config.DAYS:
+                    limit = config.PERIODS_PER_DAY.get(day, config.MAX_PERIODS)
+                    row1.append(day)
+                    for _ in range(limit - 1): row1.append("")
+                    for p in range(1, limit + 1):
+                        row2.append(str(p))
+                        
+                writer.writerow(row1)
+                writer.writerow(row2)
+                
                 classes = logic_instance.get_all_sorted_classes()
                 for g, c in classes:
-                    # 기존 시스템 및 파일과의 호환성을 위해 '1-1' 구조로 원복
                     row_subj = [f"{g}-{c}"]
                     row_teach = [""]
                     
                     for day in config.DAYS:
-                        limit = config.PERIODS_PER_DAY[day]
+                        limit = config.PERIODS_PER_DAY.get(day, config.MAX_PERIODS)
                         for p in range(1, limit + 1):
-                            data = logic_instance.schedule[str(g)][str(c)][day].get(p)
+                            data = logic_instance.schedule.get(str(g), {}).get(str(c), {}).get(day, {}).get(p)
                             if data:
-                                row_subj.append(data['subject'])
-                                row_teach.append(data['teacher'])
+                                row_subj.append(data.get('subject', ''))
+                                row_teach.append(data.get('teacher', ''))
                             else:
                                 row_subj.append("")
                                 row_teach.append("")
-                    
+                                
                     writer.writerow(row_subj)
                     writer.writerow(row_teach)
-                
-                # [메타데이터 저장]
+                    
                 if logic_instance.original_schedule:
                     try:
-                        # 1. JSON 직렬화
                         json_str = json.dumps(logic_instance.original_schedule, ensure_ascii=False)
-                        # 2. Base64 인코딩
                         encoded_str = base64.b64encode(json_str.encode('utf-8')).decode('utf-8')
-                        
-                        # 별도 행에 기록
                         writer.writerow([])
                         writer.writerow(["#METADATA_ORIGINAL_v1", encoded_str])
                     except Exception as e:
                         print(f"메타데이터 저장 실패: {e}")
 
-                # [추가] 잠금 데이터 저장
                 if logic_instance.locked_cells:
                     try:
                         locked_list = list(logic_instance.locked_cells)
@@ -336,7 +343,17 @@ class CSVManager:
                         writer.writerow(["#METADATA_LOCKED_v1", encoded_str])
                     except Exception as e:
                         print(f"잠금 데이터 저장 실패: {e}")
+                        
+                if hasattr(logic_instance, 'excluded_groups') and any(logic_instance.excluded_groups.values()):
+                    try:
+                        excluded_dict = {k: list(v) for k, v in logic_instance.excluded_groups.items()}
+                        json_str = json.dumps(excluded_dict, ensure_ascii=False)
+                        encoded_str = base64.b64encode(json_str.encode('utf-8')).decode('utf-8')
+                        writer.writerow(["#METADATA_EXCLUDED_v1", encoded_str])
+                    except Exception as e:
+                        print(f"제외 그룹 데이터 저장 실패: {e}")
 
             return True, "파일 저장이 완료되었습니다."
         except Exception as e:
-            return False, f"저장 실패: {str(e)}"
+            traceback.print_exc()
+            return False, f"파일 저장 중 오류가 발생했습니다: {str(e)}"

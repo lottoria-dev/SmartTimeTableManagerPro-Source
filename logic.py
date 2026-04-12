@@ -26,6 +26,10 @@ class TimetableLogic:
         # locked_cells: set of (grade, class, day, period)
         self.locked_cells = set()
 
+        # [신규] 특정 요일에 행사/체험학습 등으로 수업 변동 대상에서 제외된 학년들
+        # 예: {'수': {'1'}, '금': {'3'}} -> 수요일 1학년, 금요일 3학년 제외
+        self.excluded_groups = {day: set() for day in config.DAYS}
+
         # CSV 관리자 인스턴스 생성
         self.csv_manager = CSVManager()
 
@@ -43,14 +47,63 @@ class TimetableLogic:
         self.change_logs = []
         self.history_stack = []
         self.locked_cells.clear()
+        
+        # 제외 그룹 초기화
+        self.excluded_groups = {day: set() for day in config.DAYS}
+        
         self.is_modified = False
+
+    def is_excluded(self, grade, day):
+        """특정 학년이 해당 요일에 행사 등으로 제외 처리되었는지 확인합니다."""
+        g_str = str(grade)
+        # 학년 정보에서 숫자(예: '1-1'의 '1', '1학년'의 '1')만 추출
+        match = re.search(r'\d+', g_str)
+        base_g = match.group(0) if match else g_str
+        
+        return base_g in self.excluded_groups.get(day, set())
 
     def import_school_csv(self, file_path):
         """CSV 파일을 불러옵니다. (CSVManager 위임)"""
         result, msg = self.csv_manager.load_csv(file_path, self)
         if result:
-            self.is_modified = False # 불러온 직후는 변경 없음 상태
+            self._clone_week1_to_week2() # [신규] 1주일짜리 기존 파일 호환성을 위해 2주 스케줄로 확장
+            self.is_modified = False
         return result, msg
+        
+    def _clone_week1_to_week2(self):
+        """1주차 데이터만 존재할 경우 2주차로 자동 복제하여 확장합니다."""
+        has_week2 = any("2주" in str(d) for g in self.schedule for c in self.schedule[g] for d in self.schedule[g][c])
+        
+        if not has_week2:
+            # 1주차 시간표를 그대로 2주차에 복제
+            for g in list(self.schedule.keys()):
+                for c in list(self.schedule[g].keys()):
+                    for day in list(self.schedule[g][c].keys()):
+                        if "1주" in day:
+                            w2_day = day.replace("1주", "2주")
+                            self.schedule[g][c][w2_day] = copy.deepcopy(self.schedule[g][c][day])
+            
+            # 잠금 상태(Lock) 또한 2주차에 동일하게 반영
+            new_locks = set()
+            for (g, c, d, p) in self.locked_cells:
+                if "1주" in d:
+                    new_locks.add((g, c, d.replace("1주", "2주"), p))
+            self.locked_cells.update(new_locks)
+            
+            # 파생된 교사 스케줄 전면 재구축
+            self.teachers_schedule.clear()
+            self.all_teachers.clear()
+            for grade, g_data in self.schedule.items():
+                for cls, c_data in g_data.items():
+                    for day, d_data in c_data.items():
+                        for period, info in d_data.items():
+                            teacher = info.get('teacher')
+                            if teacher and self._is_valid_teacher_name(teacher):
+                                self.all_teachers.add(teacher)
+                                self.teachers_schedule[teacher][day][period].add((grade, cls))
+                                
+            # 초기 파일 원본 상태로 기록 갱신
+            self._set_original_state()
     
     def export_csv(self, file_path):
         """현재 상태를 CSV로 저장합니다. (CSVManager 위임)"""
@@ -81,9 +134,8 @@ class TimetableLogic:
         self.teachers_schedule.clear()
         self.all_teachers.clear()
         self.change_logs = []
-        # 초기화 시 히스토리는 유지하여 Undo를 통해 복구 가능하도록 변경
-        # self.history_stack = []  <- 삭제
         self.locked_cells.clear() 
+        self.excluded_groups = {day: set() for day in config.DAYS}
         
         for grade, g_data in self.schedule.items():
             for cls, c_data in g_data.items():
@@ -111,6 +163,7 @@ class TimetableLogic:
             'all_teachers': copy.deepcopy(self.all_teachers),
             'change_logs': copy.deepcopy(self.change_logs),
             'locked_cells': copy.deepcopy(self.locked_cells),
+            'excluded_groups': copy.deepcopy(self.excluded_groups),
             'is_modified': self.is_modified,
             'original_schedule': copy.deepcopy(self.original_schedule),
             'periods_per_day': copy.deepcopy(config.PERIODS_PER_DAY)
@@ -130,6 +183,7 @@ class TimetableLogic:
         self.all_teachers = last_state['all_teachers']
         self.change_logs = last_state['change_logs']
         self.locked_cells = last_state['locked_cells']
+        self.excluded_groups = last_state.get('excluded_groups', {day: set() for day in config.DAYS})
         self.is_modified = last_state['is_modified']
         
         if 'original_schedule' in last_state:
@@ -379,6 +433,7 @@ class TimetableLogic:
         return info
 
     def is_teacher_busy(self, teacher, day, period, ignore_grade=None, ignore_class=None):
+        """특정 교사가 주어진 시간에 수업이 있는지 확인합니다."""
         if not teacher: return False
         locations = self.teachers_schedule.get(teacher, {}).get(day, {}).get(period, set())
         if not locations: return False
@@ -387,13 +442,20 @@ class TimetableLogic:
         for g, c in locations:
             if str(g) == str(ignore_grade) and str(c) == str(ignore_class):
                 continue
+            # [수정] 제외 학년이면 바쁜 것으로 간주하지 않음 (해당 학년의 수업은 없는 것으로 침)
+            if self.is_excluded(g, day):
+                continue
             count += 1
         return count > 0
 
     def is_conflicted(self, teacher, day, period):
+        """중복된 스케줄이 존재하는지 확인합니다. (제외된 학년은 충돌에서 뺌)"""
         if not teacher: return False
         locations = self.teachers_schedule.get(teacher, {}).get(day, {}).get(period, set())
-        return len(locations) > 1
+        
+        # [수정] 제외 학년은 충돌 계산에서 제외
+        normal_locs = [loc for loc in locations if not self.is_excluded(loc[0], day)]
+        return len(normal_locs) > 1
 
     def get_busy_info(self, teacher, day, period):
         return list(self.teachers_schedule.get(teacher, {}).get(day, {}).get(period, set()))
@@ -405,8 +467,13 @@ class TimetableLogic:
         is_busy_list = []
         for p in range(1, limit + 1):
             busy = False
-            if self.teachers_schedule.get(teacher, {}).get(day, {}).get(p, set()): 
-                busy = True
+            locations = self.teachers_schedule.get(teacher, {}).get(day, {}).get(p, set())
+            for g, c in locations:
+                # [수정] 연강 확인할 때 제외 학년의 수업은 제외함
+                if not self.is_excluded(g, day):
+                    busy = True
+                    break
+            
             if p == target_period:
                 busy = True
             is_busy_list.append(busy)
@@ -428,11 +495,22 @@ class TimetableLogic:
         return streak_len >= 3
 
     def get_cover_candidates(self, day, period):
+        """보강 가능한 교사 목록을 추출합니다."""
         candidates = []
         for teacher in sorted(list(self.all_teachers)):
             if self.is_teacher_busy(teacher, day, period): continue
             if self.check_consecutive_classes(teacher, day, period): continue
-            candidates.append(teacher)
+            
+            # [수정] 교사가 원래 이 시간에 수업이 있었지만 제외 학년이어서 비어있는 것으로 처리된 경우 구분 기호(*) 추가
+            locations = self.teachers_schedule.get(teacher, {}).get(day, {}).get(period, set())
+            is_asterisk = False
+            for g, c in locations:
+                if self.is_excluded(g, day):
+                    is_asterisk = True
+                    break
+            
+            display_name = f"{teacher}*" if is_asterisk else teacher
+            candidates.append(display_name)
         
         candidates.append("특별보강(교장)")
         candidates.append("특별보강(교감)")

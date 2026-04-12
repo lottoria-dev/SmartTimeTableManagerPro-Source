@@ -2,12 +2,21 @@ import sys
 import os
 
 # --- 전역 설정 상수 ---
-DAYS = ["월", "화", "수", "목", "금"]
+# [신규] 2주차 스케줄 지원을 위한 주차 및 요일 분리
+WEEKS = [1, 2]
+BASE_DAYS = ["월", "화", "수", "목", "금"]
 
-# 요일별 교시 수 설정
-PERIODS_PER_DAY = {
-    "월": 6, "화": 7, "수": 6, "목": 7, "금": 6
-}
+# "1주 월", "1주 화", ... , "2주 목", "2주 금" 형태로 10일치 요일 생성
+DAYS = [f"{w}주 {d}" for w in WEEKS for d in BASE_DAYS]
+
+# 요일별 교시 수 설정 (1주/2주 기본값 매핑)
+PERIODS_PER_DAY = {}
+for w in WEEKS:
+    PERIODS_PER_DAY[f"{w}주 월"] = 6
+    PERIODS_PER_DAY[f"{w}주 화"] = 7
+    PERIODS_PER_DAY[f"{w}주 수"] = 6
+    PERIODS_PER_DAY[f"{w}주 목"] = 7
+    PERIODS_PER_DAY[f"{w}주 금"] = 6
 
 MAX_PERIODS = 7
 

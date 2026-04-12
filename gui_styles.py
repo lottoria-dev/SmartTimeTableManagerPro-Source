@@ -1,236 +1,313 @@
 # --- 스타일 및 설정 ---
 STYLE_SHEET = """
-/* 시스템 다크모드 무시 및 라이트 테마 강제 적용 */
+/* 시스템 다크모드 무시 및 고급스러운 글래스모피즘(투명 글래스) 테마 적용 */
 QWidget {
-    background-color: #ffffff;
-    color: #1f2937;
-    font-family: 'Malgun Gothic', 'Segoe UI', sans-serif;
+    font-family: "Segoe UI", "Apple Color Emoji", 'Pretendard', 'Malgun Gothic', sans-serif;
+    color: #1e293b;
 }
 
+/* 메인 윈도우 프리미엄 배경 (세련된 쿨그레이 & 소프트 블루) */
 QMainWindow {
-    background-color: #f3f4f6;
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                                stop:0 #F4F7F9, 
+                                stop:0.4 #FFFFFF, 
+                                stop:1 #E2E8F0);
 }
 
-/* 라벨 스타일: 불필요한 여백 제거 */
+/* 라벨 기본 여백 제거 */
 QLabel {
     background-color: transparent;
-    color: #1f2937;
-    padding: 0px;
-    margin: 0px;
+    padding: 0px; margin: 0px;
 }
 
-/* 라디오 버튼 스타일 (상단 라인 강조 탭 형태 - 하단 잘림 완벽 해결) */
+/* =========================================================
+   [신규] 컨테이너 입체감(3D Bevel) 및 무채색(Gray) 효과 적용 
+   ========================================================= */
+
+/* 상단 버튼 영역 (부드러운 무채색 그라데이션 + 입체감 테두리) */
+QFrame#TopPanel {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #f9fafb, stop:1 #e5e7eb); /* 밝은 회색 ~ 짙은 회색 */
+    border-top: 1px solid #ffffff;     /* 빛을 받는 윗면 하이라이트 */
+    border-left: 1px solid #ffffff;
+    border-right: 1px solid #d1d5db;   /* 그림자 지는 아랫면 */
+    border-bottom: 1px solid #d1d5db;
+    border-radius: 12px;
+}
+
+/* 메인 그리드 패널 (기존 화이트 반투명 유지하여 내부 콘텐츠 강조) */
+QFrame#MainPanel {
+    background-color: rgba(255, 255, 255, 0.85);
+    border: 1px solid rgba(255, 255, 255, 0.9);
+    border-radius: 12px;
+}
+
+/* 보기 방식 라인 옵션 바 (상단 패널과 동일한 무채색 입체감 적용) */
+QFrame#OptionBar {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #f9fafb, stop:1 #e5e7eb);
+    border-top: 1px solid #ffffff;
+    border-left: 1px solid #ffffff;
+    border-right: 1px solid #d1d5db;
+    border-bottom: 1px solid #d1d5db;
+    border-radius: 8px;
+}
+/* ========================================================= */
+
+
+/* 상단 버튼 그룹 기본 스타일 (뚜렷한 글래스 효과) */
+QPushButton {
+    background-color: rgba(255, 255, 255, 0.7);
+    border: 1px solid rgba(203, 213, 225, 0.8);
+    border-radius: 6px;
+    padding: 8px 16px; 
+    min-height: 18px; 
+    color: #1e293b;
+    font-weight: normal; 
+    font-size: 13px; 
+    font-family: "Segoe UI", 'Malgun Gothic', sans-serif;
+}
+QPushButton:hover {
+    background-color: rgba(255, 255, 255, 1.0);
+    border-color: #94a3b8;
+    color: #0f172a;
+}
+QPushButton:pressed {
+    background-color: rgba(241, 245, 249, 1.0);
+    padding-top: 10px; padding-bottom: 6px;
+}
+
+/* 상단 버튼 일체감 통합 (기본 상태는 똑같이 맞추고 호버 시에만 은은한 톤 적용) */
+QPushButton#PrimaryBtn, QPushButton#SuccessBtn, QPushButton#DangerBtn, QPushButton#InfoBtn {
+    background-color: rgba(255, 255, 255, 0.7);
+    border: 1px solid rgba(203, 213, 225, 0.8);
+    color: #1e293b;
+}
+QPushButton#PrimaryBtn:hover { background-color: #f0f9ff; border-color: #7dd3fc; color: #0284c7; }
+QPushButton#SuccessBtn:hover { background-color: #f0fdf4; border-color: #86efac; color: #16a34a; }
+QPushButton#DangerBtn:hover { background-color: #fef2f2; border-color: #fca5a5; color: #dc2626; }
+QPushButton#InfoBtn:hover { background-color: #eef2ff; border-color: #a5b4fc; color: #4f46e5; }
+
+
+/* 모드 탭 버튼 */
+QPushButton#ModeBtn {
+    background-color: rgba(241, 245, 249, 0.6);
+    color: #475569;
+    border: 1px solid rgba(226, 232, 240, 0.8);
+    padding: 8px 16px; 
+    min-height: 18px;
+    font-size: 13px;
+    font-family: "Segoe UI", 'Malgun Gothic', sans-serif;
+}
+QPushButton#ModeBtn:hover { background-color: rgba(255, 255, 255, 0.9); color: #1e293b; }
+QPushButton#ModeBtn:checked {
+    background-color: #ffffff;
+    color: #0ea5e9; 
+    border: 1px solid #bae6fd;
+    font-weight: normal; 
+}
+
+
+/* 콤보박스 글래스 효과 */
+QComboBox {
+    background-color: rgba(255, 255, 255, 0.8);
+    border: 1px solid rgba(203, 213, 225, 0.8);
+    border-radius: 6px; padding: 6px 10px;
+    color: #1e293b; 
+    font-weight: normal; 
+    font-size: 13px;
+}
+QComboBox:hover { background-color: #ffffff; border-color: #94a3b8; }
+QComboBox::drop-down { border: none; padding-right: 5px; }
+QComboBox QAbstractItemView {
+    background-color: rgba(255, 255, 255, 0.95);
+    border: 1px solid rgba(203, 213, 225, 0.8);
+    border-radius: 6px; selection-background-color: #e0f2fe; selection-color: #0284c7;
+}
+
+/* 체크박스 */
+QCheckBox { background-color: transparent; color: #475569; font-size: 13px; }
+QCheckBox::indicator {
+    width: 16px; height: 16px;
+    background-color: rgba(255, 255, 255, 0.9);
+    border: 1px solid rgba(148, 163, 184, 0.6);
+    border-radius: 4px;
+}
+QCheckBox::indicator:hover { border-color: #3b82f6; }
+QCheckBox::indicator:checked { background-color: #3b82f6; border-color: #2563eb; }
+
+/* 보기 방식 탭(라디오 버튼) 세련된 상단 라인 스타일 */
 QRadioButton {
     background-color: transparent;
-    color: #6b7280;
-    font-weight: bold;
+    color: #475569;
+    font-family: "Segoe UI", 'Malgun Gothic', sans-serif;
+    font-weight: normal; 
+    font-size: 13px;
     border: none;
-    border-top: 3px solid transparent; /* 평소에는 투명한 상단 선으로 높이 유지 */
-    border-radius: 0px; /* 탭 형태이므로 둥근 모서리 제거 */
-    padding: 6px 12px;
+    border-top: 3px solid transparent; 
+    border-radius: 0px; 
+    padding: 8px 14px;
+    min-height: 18px;
     text-align: center;
-    spacing: 0px; /* 텍스트 쏠림 방지 */
+    spacing: 0px; 
     margin: 0px;
 }
 QRadioButton::indicator {
-    width: 0px;
-    height: 0px;
-    margin: 0px;
-    padding: 0px;
-    border: none;
-    background: transparent;
+    width: 0px; height: 0px; margin: 0px; padding: 0px; border: none; background: transparent;
 }
 QRadioButton:hover {
-    background-color: #f9fafb;
-    color: #374151;
-    border-top: 3px solid #d1d5db; /* 마우스 오버 시 옅은 회색 선 */
+    background-color: rgba(241, 245, 249, 0.6);
+    color: #1e293b;
+    border-top: 3px solid #cbd5e1; 
 }
 QRadioButton:checked {
-    background-color: #eff6ff; 
-    color: #1d4ed8;
-    border-top: 3px solid #3b82f6; /* 활성화 시 파란색 상단 굵은 선 */
-}
-QRadioButton:pressed {
-    background-color: #e5e7eb;
+    background-color: rgba(255, 255, 255, 0.9); 
+    color: #1e293b;
+    border-top: 3px solid #f87171; 
 }
 
-/* 체크박스 지시자(네모 박스) 스타일 복원 및 테두리 추가 */
-QCheckBox::indicator {
-    width: 14px;
-    height: 14px;
-    border: 2px solid #9ca3af;
-    border-radius: 3px;
-    background-color: #ffffff;
-}
-QCheckBox::indicator:hover {
-    border-color: #3b82f6; 
-}
-QCheckBox::indicator:checked {
-    background-color: #3b82f6; 
-    border-color: #3b82f6;
+/* =========================================================
+   분산되었던 인라인 스타일 통합 관리 구역
+   ========================================================= */
+
+/* 상태 표시줄 */
+QLabel#StatusBar {
+    background-color: rgba(255, 255, 255, 0.65); 
+    border: 1px solid rgba(255, 255, 255, 0.9);
+    border-radius: 6px; 
+    font-weight: normal; 
+    padding: 6px 12px; 
+    font-size: 13px; 
+    margin: 0px 4px;
 }
 
-/* 모드 전환 탭 버튼 스타일 */
-QPushButton#ModeBtn {
-    background-color: #ffffff;
-    color: #4b5563;
-    border: 1px solid #d1d5db;
-    border-radius: 8px;
-    padding: 4px 14px;
-    margin-top: 0px;
-    margin-bottom: 0px;
-    font-weight: bold;
-    font-size: 11px;
-    text-align: center;
-}
-QPushButton#ModeBtn:hover {
-    background-color: #f9fafb;
-    border-color: #9ca3af;
-}
-QPushButton#ModeBtn:checked {
-    background-color: #3b82f6;
-    color: white;
-    border: 1px solid #2563eb;
-}
-
-/* 일반 버튼 스타일 */
-QPushButton {
-    background-color: #ffffff;
-    border: 1px solid #d1d5db;
+/* 변경된 항목만 보기 체크박스 */
+QCheckBox#OnlyChangedChk {
+    font-weight: normal; color: #d97706; margin-left: 15px;
+    background-color: rgba(255, 255, 255, 0.65);
+    border: 1px solid rgba(255, 255, 255, 0.9);
     border-radius: 6px;
-    padding: 4px 10px;
-    margin-top: 0px;
-    margin-bottom: 0px;
-    color: #374151;
-    font-weight: bold;
+    padding: 6px 10px; 
 }
-QPushButton:hover {
-    background-color: #f9fafb;
-    border-color: #9ca3af;
-}
-QPushButton#PrimaryBtn {
-    background-color: #3b82f6;
-    color: white;
-    border: 1px solid #2563eb;
-}
-QPushButton#PrimaryBtn:hover { background-color: #2563eb; }
-QPushButton#PrimaryBtn:pressed { 
-    background-color: #1d4ed8; 
-    border-color: #1e40af;
+QCheckBox#OnlyChangedChk:hover { background-color: rgba(255, 255, 255, 0.85); }
+
+/* 스플리터 (틀 고정용) */
+QSplitter#HeaderSplitter::handle, QSplitter#MainSplitter::handle { 
+    background-color: rgba(203, 213, 225, 0.5); 
+    margin: 2px 0px; 
+    border-radius: 2px; 
 }
 
-QPushButton#SuccessBtn {
-    background-color: #10b981;
-    color: white;
-    border: 1px solid #059669;
+/* 그리드 셀 & 헤더 관련 */
+QLabel#GridHeader {
+    background-color: rgba(241, 245, 249, 0.85); 
+    font-weight: 800;
+    border: 1px solid rgba(226, 232, 240, 1.0);
+    border-bottom: 2px solid rgba(203, 213, 225, 1.0);
+    color: #1e293b; 
+    border-radius: 6px; 
 }
-QPushButton#SuccessBtn:hover { background-color: #059669; }
-QPushButton#SuccessBtn:pressed { 
-    background-color: #047857; 
-    border-color: #064e3b;
+QLabel#EmptyCell {
+    background-color: #ffffff; 
+    border: 1px solid rgba(226, 232, 240, 1.0); 
+    border-radius: 6px;
 }
-
-QPushButton#DangerBtn {
-    background-color: #ef4444;
-    color: white;
-    border: 1px solid #dc2626;
+QLabel#SplitterLine {
+    background-color: rgba(203, 213, 225, 0.4); 
+    border-radius: 2px;
 }
-QPushButton#DangerBtn:hover { background-color: #dc2626; }
-QPushButton#DangerBtn:pressed { 
-    background-color: #b91c1c; 
-    border-color: #7f1d1d;
+QLabel#EmptyMessage {
+    font-size: 14px; font-weight: bold; color: #64748b; padding: 20px;
 }
-
-QPushButton#InfoBtn {
-    background-color: #6366f1;
-    color: white;
-    border: 1px solid #4f46e5;
-}
-QPushButton#InfoBtn:hover { background-color: #4f46e5; }
-QPushButton#InfoBtn:pressed { 
-    background-color: #4338ca; 
-    border-color: #312e81;
+QLabel#SubjectMatchLabel {
+    background-color: #ffffff; 
+    border: 1px solid rgba(226, 232, 240, 1.0); 
+    font-size: 12px; padding: 4px; border-radius: 6px; color: #1e293b;
 }
 
-QFrame#Card {
-    background-color: white;
-    border: 1px solid #e5e7eb;
-    border-radius: 8px;
+/* 요일 제어 컨트롤 */
+QWidget#DayControl { 
+    background-color: rgba(248, 250, 252, 0.85); 
+    border: 1px solid rgba(226, 232, 240, 1.0); 
+    border-bottom: 2px solid rgba(203, 213, 225, 1.0);
+    border-radius: 6px; 
 }
-QScrollArea {
-    border: none;
-    background-color: transparent;
+QLabel#DayLabel {
+    background-color: transparent; color: #1e293b; font-size: 13px;
 }
-/* 스크롤 영역 내부 위젯 배경 강제 지정 */
-QScrollArea > QWidget > QWidget {
-    background-color: #ffffff;
+QLabel#ExclLabel {
+    background-color: transparent; font-size: 12px; font-weight: bold; color: #64748b;
 }
+QCheckBox#ExclCheck { 
+    background-color: transparent; font-size: 12px; font-weight: bold; color: #475569; 
+}
+QCheckBox#ExclCheck::indicator { width: 14px; height: 14px; }
+QPushButton#ReplaceBtn { 
+    background-color: rgba(255, 255, 255, 0.9); color: #475569; 
+    border: 1px solid rgba(203, 213, 225, 0.8); border-radius: 4px; 
+    font-size: 12px; padding: 4px 8px; font-weight: normal; 
+}
+QPushButton#ReplaceBtn:hover { background-color: #f1f5f9; border-color: #0ea5e9; color: #0284c7; }
 
-/* 트리 위젯 (로그창 - 다이얼로그용) */
+/* 맥OS 스타일 커스텀 스크롤바 */
+QScrollBar:vertical { border: none; background: transparent; width: 10px; margin: 0px; }
+QScrollBar::handle:vertical { background: rgba(148, 163, 184, 0.4); min-height: 30px; border-radius: 5px; margin: 2px; }
+QScrollBar::handle:vertical:hover { background: rgba(148, 163, 184, 0.7); }
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }
+
+QScrollBar:horizontal { border: none; background: transparent; height: 10px; margin: 0px; }
+QScrollBar::handle:horizontal { background: rgba(148, 163, 184, 0.4); min-width: 30px; border-radius: 5px; margin: 2px; }
+QScrollBar::handle:horizontal:hover { background: rgba(148, 163, 184, 0.7); }
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0px; }
+QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal { background: transparent; }
+
+/* 스크롤 영역 투명화 */
+QScrollArea, QScrollArea > QWidget > QWidget { background-color: transparent; border: none; }
+
+/* 트리 위젯 (로그창용) 고급화 */
 QTreeWidget {
-    border: 1px solid #e5e7eb;
-    border-radius: 6px;
-    background-color: white;
-    color: #1f2937;
+    background-color: rgba(255, 255, 255, 0.9);
+    border: 1px solid rgba(203, 213, 225, 0.8);
+    border-radius: 8px; outline: none;
 }
-QTreeWidget::item {
-    color: #1f2937;
-    height: 24px;
-}
-QTreeWidget::item:selected {
-    background-color: #3b82f6;
-    color: white;
-}
+QTreeWidget::item { height: 28px; border-bottom: 1px solid rgba(226, 232, 240, 0.5); }
+QTreeWidget::item:selected { background-color: #e0f2fe; color: #0369a1; }
 QHeaderView::section {
-    background-color: #f9fafb;
-    padding: 4px;
-    border: 0px;
-    font-weight: bold;
-    color: #4b5563;
+    background-color: #f8fafc;
+    border: none; border-bottom: 1px solid rgba(203, 213, 225, 0.8);
+    padding: 6px; font-weight: 800; color: #475569;
 }
 
-/* 콤보박스 스타일 */
-QComboBox {
-    background-color: white;
-    color: #1f2937;
-    border: 1px solid #d1d5db;
-    border-radius: 4px;
-    padding: 4px;
-}
-QComboBox QAbstractItemView {
-    background-color: white;
-    color: #1f2937;
-    selection-background-color: #3b82f6;
-}
-
-/* 셀 프레임 자체의 패딩 제거 */
-QFrame#Cell {
-    padding: 0px;
-    margin: 0px;
-}
-
-/* [추가] 툴팁 UI 세련되게 설정 */
+/* 툴팁 UI */
 QToolTip {
-    background-color: #1e293b;
-    color: #f8fafc;
-    border: 1px solid #475569;
-    border-radius: 4px;
-    padding: 8px;
-    font-family: 'Malgun Gothic';
-    font-size: 12px;
+    background-color: rgba(15, 23, 42, 0.9);
+    color: #f8fafc; border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 6px; padding: 10px; font-size: 13px;
 }
+
+/* --- 다이얼로그 전용 배경 처리 --- */
+QDialog, QMessageBox { background-color: #f8fafc; }
+QMessageBox QLabel, QDialog QLabel {
+    color: #1e293b; background-color: transparent; font-size: 13px;
+}
+QMessageBox QPushButton, QDialog QPushButton {
+    background-color: #0ea5e9; color: #ffffff; border: none; border-radius: 6px;
+    padding: 6px 16px; font-weight: normal; min-height: 18px; min-width: 60px;
+}
+QMessageBox QPushButton:hover, QDialog QPushButton:hover { background-color: #0284c7; }
 """
 
+# 셀 배경색 단순화 (렌더링 최적화)
 COLORS = {
-    "cell_default": "#f9fafb",
-    "cell_locked": "#e5e7eb",
-    "cell_changed": "#fef9c3",
-    "cell_selected": "#dbeafe",
-    "cell_target": "#dcfce7",
-    "cell_conflict": "#fee2e2",
+    "cell_default": "#ffffff",
+    "cell_locked": "#f1f5f9", 
+    "cell_changed": "#fefcbf", 
+    "cell_selected": "#dbeafe", 
+    "cell_target": "#d1fae5", 
+    "cell_conflict": "#fee2e2", 
     "cell_chain_src": "#f3e8ff",
     "cell_chain_tgt": "#e9d5ff",
-    "text_primary": "#111827",
-    "text_secondary": "#6b7280",
-    "accent": "#3b82f6"
+    "cell_excluded": "#cbd5e1", 
+    "text_primary": "#1e293b",
+    "text_secondary": "#64748b",
+    "accent": "#0ea5e9"
 }

@@ -2,30 +2,25 @@ from PySide6.QtWidgets import QMessageBox, QApplication, QToolTip
 from PySide6.QtGui import QCursor
 from PySide6.QtCore import Qt, QRect
 from gui_styles import COLORS
+from gui_components import ChangeDetailDialog
 
 class CellInteractionHandler:
     """그리드 셀 클릭 및 작업 모드별 비즈니스 로직을 분리한 클래스"""
     def __init__(self, main_window):
         self.mw = main_window
-        
-        # [패치] 연쇄 이동 중 취소/모드 전환 시 데이터 증발 방지 및 완벽한 트랜잭션 롤백 강제화
         self._original_cancel_action = self.mw.cancel_action
         self.mw.cancel_action = self._safe_cancel_action
 
     def _safe_cancel_action(self):
-        """안전한 취소 처리. 공중에 뜬 데이터가 있으면 연쇄 이동 시작 전으로 한 번에 롤백합니다."""
         if self.mw.work_mode == "CHAIN" and getattr(self.mw, 'chain_floating_data', None):
             self.mw.logic.undo()
             self.mw.chain_floating_data = None
             self.mw.status_bar.setText("⚠️ 이동이 취소되어 시작 전 상태로 완벽히 복구되었습니다.")
             self.mw.update_log_view()
-            
             if hasattr(self.mw, 'chk_only_changed') and self.mw.chk_only_changed.isChecked():
                 self.mw.refresh_grid()
             else:
                 self.mw.update_cell_visuals()
-                
-        # 메인 윈도우의 원래 취소 로직 실행 (단, chain_floating_data가 None이 되었으므로 내부 불완전 복구는 스킵됨)
         self._original_cancel_action()
 
     def handle_cell_click(self, key):
@@ -52,6 +47,12 @@ class CellInteractionHandler:
                     
         grade, cls, day, period = key
         grade, cls = str(grade), str(cls)
+
+        # [신규] 제외된 학년/요일 차단 로직
+        if self.mw.logic.is_excluded(grade, day):
+            self.mw.status_bar.setText(f"🚫 {grade}학년은 {day}요일 행사로 인해 선택에서 제외되었습니다.")
+            return
+
         cell_data = self.mw.logic.schedule[grade][cls][day].get(period)
         clicked_teacher = cell_data['teacher'] if cell_data else None
 
@@ -63,12 +64,12 @@ class CellInteractionHandler:
             msg = f"{is_locked}선택: {clicked_teacher} ({cell_data['subject']})" if clicked_teacher else "빈 교시"
             self.mw.status_bar.setText(msg)
             
-            # [수정] 툴팁 대신 팝업창(QMessageBox)을 띄워 마우스 움직임과 무관하게 여유롭게 읽을 수 있도록 개선
             if self.mw.logic.is_changed(grade, cls, day, period):
                 details = self.mw.logic.get_cell_change_details(grade, cls, day, period)
                 if details:
-                    QMessageBox.information(self.mw, f"{grade}-{cls} {day} {period}교시 상세 변동 내역", details)
-            
+                    dialog = ChangeDetailDialog(f"{grade}-{cls} {day} {period}교시 상세 변동 내역", details, self.mw)
+                    dialog.exec()
+                    
         elif self.mw.work_mode == "SWAP":
             if self.mw.logic.is_locked(grade, cls, day, period):
                 self.mw.status_bar.setText("🔒 잠긴 수업입니다.")
@@ -116,7 +117,7 @@ class CellInteractionHandler:
                 self.mw.last_swapped_cells = [self.mw.swap_source, key]
                 self.mw.swap_source = None
                 self.mw.swap_candidates = []
-                self.mw.highlighted_teachers = {} # 교환 완료 후 선택 하이라이트 해제
+                self.mw.highlighted_teachers = {} 
                 self.mw.status_bar.setText("✅ 교체 완료")
                 self.mw.update_log_view()
                 
@@ -151,12 +152,10 @@ class CellInteractionHandler:
                     if (grade, cls) != (orig_g, orig_c):
                         QMessageBox.warning(self.mw, "오류", "같은 반 내에서 이동해야 합니다.")
                         return
-                    
                     if day != orig_d:
                         QMessageBox.warning(self.mw, "안내", "AI 자동 연쇄 이동은 현재 같은 요일 내에서만 지원됩니다.\n다른 요일로의 이동은 수동 연쇄 모드를 이용해 주세요.")
                         return                     
                     
-                    # [업데이트] 연쇄/AI 처리 시간에 모래시계 커서 적용
                     QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
                     try:
                         success, msg, logs = self.mw.ai_mover.try_ai_move(orig_g, orig_c, orig_d, orig_p, day, period)
@@ -184,7 +183,7 @@ class CellInteractionHandler:
             else:
                 if not self.mw.chain_floating_data:
                     if not cell_data: return
-                    self.mw.logic.save_snapshot() # 첫 연쇄 이동 시작에만 백업
+                    self.mw.logic.save_snapshot() 
                     self.mw.chain_floating_data = cell_data.copy()
                     self.mw.chain_floating_data['origin_gc'] = (grade, cls)
                     self.mw.chain_floating_data['origin_time'] = (day, period)
@@ -208,7 +207,6 @@ class CellInteractionHandler:
                             return 
 
                     target_old_data = self.mw.logic.schedule[grade][cls][day].get(period)
-                    # [개선] 연쇄 이동을 완벽한 단일 트랜잭션으로 묶기 위해 중간에 스냅샷을 찍지 않음
                     self.mw.logic.add_class(grade, cls, day, period, floater['subject'], floater['teacher'])
                     data_changed = True  
                     self.mw.logic.change_logs.append({
@@ -233,26 +231,19 @@ class CellInteractionHandler:
         else:
             self.mw.update_cell_visuals()
 
-    # [추가] 드래그 앤 드롭으로 셀 이동이 완료되었을 때 실행되는 로직
     def handle_cell_drop(self, src_key, tgt_key):
-        if src_key == tgt_key:
-            return
+        if src_key == tgt_key: return
             
-        # 출발지 및 목적지 키 파싱
         if isinstance(src_key, tuple) and src_key[0] == "TEACHER_VIEW":
             _, teacher_name, day, period = src_key
             locations = list(self.mw.logic.teachers_schedule.get(teacher_name, {}).get(day, {}).get(period, set()))
-            if locations:
-                g, c = locations[0]
-                src_key = (str(g), str(c), day, period)
+            if locations: g, c = locations[0]; src_key = (str(g), str(c), day, period)
             else: return
                 
         if isinstance(tgt_key, tuple) and tgt_key[0] == "TEACHER_VIEW":
             _, teacher_name, day, period = tgt_key
             locations = list(self.mw.logic.teachers_schedule.get(teacher_name, {}).get(day, {}).get(period, set()))
-            if locations:
-                g, c = locations[0]
-                tgt_key = (str(g), str(c), day, period)
+            if locations: g, c = locations[0]; tgt_key = (str(g), str(c), day, period)
             else:
                 self.mw.status_bar.setText("⚠️ 해당 뷰에서는 빈 셀로의 드래그 앤 드롭을 지원하지 않습니다.")
                 return
@@ -262,8 +253,12 @@ class CellInteractionHandler:
         
         src_g, src_c = str(src_g), str(src_c)
         tgt_g, tgt_c = str(tgt_g), str(tgt_c)
+
+        # [신규] 드래그 대상/목적지가 제외된 학년/요일인 경우 차단
+        if self.mw.logic.is_excluded(src_g, src_d) or self.mw.logic.is_excluded(tgt_g, tgt_d):
+            QMessageBox.warning(self.mw, "이동 불가", "행사 등으로 제외 처리된 학년은 이동/교환할 수 없습니다.")
+            return
         
-        # 현재 선택된 모드를 기반으로 직관적인 드래그 액션 처리
         if self.mw.work_mode == "SWAP":
             if (src_g, src_c) != (tgt_g, tgt_c):
                 QMessageBox.warning(self.mw, "오류", "같은 반 내에서만 교환 가능합니다.")
@@ -272,7 +267,6 @@ class CellInteractionHandler:
                 QMessageBox.warning(self.mw, "오류", "잠겨있는 수업은 교환할 수 없습니다.")
                 return
             
-            # 3연강 경고 생략 후 바로 처리 (드래그 앤 드롭의 신속성을 위해)
             self.mw.logic.execute_swap(src_g, src_c, src_d, src_p, tgt_d, tgt_p)
             self.mw.status_bar.setText("✅ 드래그 앤 드롭: 맞교환 완료")
             self.mw.cancel_action()
@@ -291,14 +285,11 @@ class CellInteractionHandler:
             finally:
                 QApplication.restoreOverrideCursor()
                 
-            if success:
-                self.mw.status_bar.setText(f"✅ 드래그 앤 드롭: {msg}")
-            else:
-                QMessageBox.warning(self.mw, "AI 자동 이동 안내", msg)
+            if success: self.mw.status_bar.setText(f"✅ 드래그 앤 드롭: {msg}")
+            else: QMessageBox.warning(self.mw, "AI 자동 이동 안내", msg)
             self.mw.cancel_action()
             
         else:
-            # 기본적으로 수동 연쇄(이동)으로 처리
             if (src_g, src_c) != (tgt_g, tgt_c):
                 QMessageBox.warning(self.mw, "오류", "같은 반 내에서 이동해야 합니다.")
                 return
@@ -320,7 +311,6 @@ class CellInteractionHandler:
             })
             
             if tgt_data:
-                # 밀려난 데이터를 플로팅 상태로 변경
                 self.mw.work_mode = "CHAIN"
                 self.mw.use_ai_mode = False
                 for btn in self.mw.mode_btn_group.buttons():
@@ -349,7 +339,13 @@ class CellInteractionHandler:
             if not locations: return 
             g, c = locations[0]
             key = (str(g), str(c), day, period)
+            
         grade, cls, day, period = key
+        # [신규] 제외된 학년/요일이면 잠금 토글 무시
+        if self.mw.logic.is_excluded(grade, day):
+            self.mw.status_bar.setText("🚫 행사 제외 요일은 잠금 설정이 무의미합니다.")
+            return
+            
         is_locked = self.mw.logic.toggle_lock(grade, cls, day, period)
         msg = "🔒 잠금 설정" if is_locked else "🔓 잠금 해제"
         self.mw.status_bar.setText(f"[{grade}-{cls} {day}{period}] {msg}")
@@ -357,11 +353,13 @@ class CellInteractionHandler:
 
     def execute_cover(self):
         if not self.mw.selected_cell_info: return
-        new_teacher = self.mw.combo_cover_teacher.currentText()
-        if not new_teacher: return
+        new_teacher_display = self.mw.combo_cover_teacher.currentText()
+        if not new_teacher_display: return
+        
+        # [수정] '*' 표시를 제거하고 순수 교사 이름만 추출
+        new_teacher = new_teacher_display.replace("*", "")
         
         g, c, d, p = self.mw.selected_cell_info
-        
         self.mw.logic.update_teacher(g, c, d, p, new_teacher)
         
         self.mw.selected_cell_info = None

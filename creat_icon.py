@@ -186,6 +186,9 @@ def create_app_icon():
     head2_s = patches.Polygon(iso_head2_s, facecolor='black', alpha=0.2, lw=0, zorder=2)
     ax.add_patch(head2_s)
 
+    ax.text(115, -25, "3", fontsize=75, fontweight='black', color='#ef4444', 
+            ha='center', va='center', zorder=10)
+
     # 저장
     plt.tight_layout()
     plt.savefig('app_icon.png', transparent=True, bbox_inches='tight', pad_inches=0)

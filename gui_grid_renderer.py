@@ -1,48 +1,205 @@
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel
-from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QCheckBox, QPushButton, QSizePolicy, QApplication, QGraphicsOpacityEffect
+from PySide6.QtCore import Qt, QObject, QEvent, QTimer
 import config
 from gui_styles import COLORS
 from gui_components import ClickableFrame
+from gui_grid_views import render_view
+import re
+
+class WatermarkFilter(QObject):
+    def __init__(self, watermark):
+        super().__init__(watermark)
+        self.watermark = watermark
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.Type.Resize:
+            self.watermark.resize(event.size())
+        return False
 
 class GridRenderer:
-    """화면 레이아웃 그리기 및 셀 시각화 업데이트를 분리한 클래스"""
+    """그리드 위젯의 메모리 풀링 및 공통 기능(Core)만 담당하는 메인 렌더러"""
     def __init__(self, main_window):
         self.mw = main_window
+        self.cell_pool = []
+        self.header_pool = []
+        self.view_caches = {}
+        self.current_cache_key = None
+        self.last_structural_fingerprint = None
+
+    def _pool_widgets_from(self, container):
+        if not container or not container.layout():
+            return
+        layout = container.layout()
+        while layout.count():
+            item = layout.takeAt(0)
+            widget = item.widget()
+            if widget:
+                if isinstance(widget, ClickableFrame):
+                    widget.hide()
+                    widget.setParent(None)
+                    
+                    wm = widget.findChild(QLabel, "LockWatermark")
+                    if wm: 
+                        wm.hide()
+                        wm._is_visible = False
+                    self.cell_pool.append(widget)
+                elif type(widget) == QLabel and widget.objectName() not in ["DayControl", "LockWatermark"]:
+                    widget.hide()
+                    widget.setParent(None)
+                    self.header_pool.append(widget)
+                else:
+                    widget.setParent(None)
+                    widget.deleteLater()
+
+    def clear_cache(self):
+        for cache in self.view_caches.values():
+            for container in [cache['left'], cache['right'], cache['h_left'], cache['h_right']]:
+                if container:
+                    self._pool_widgets_from(container)
+                    container.deleteLater()
+        self.view_caches.clear()
+        
+        for scroll in [self.mw.left_scroll, self.mw.right_scroll, self.mw.header_left_scroll, self.mw.header_right_scroll]:
+            old = scroll.takeWidget()
+            if old:
+                self._pool_widgets_from(old)
+                old.deleteLater()
+                
+        self.mw.cell_widget_map.clear()
+        self.current_cache_key = None
 
     def refresh_grid(self, _=None):
-        old_widget = self.mw.scroll_area.widget()
-        if old_widget: old_widget.deleteLater()
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            current_classes = tuple(self.mw.logic.get_all_sorted_classes())
+            periods_fingerprint = tuple(config.PERIODS_PER_DAY.items())
+            current_fingerprint = hash((current_classes, periods_fingerprint, tuple(config.DAYS)))
             
-        self.mw.grid_container = QWidget()
-        
-        main_vbox = QVBoxLayout(self.mw.grid_container)
-        main_vbox.setContentsMargins(0, 0, 0, 0)
-        main_vbox.setSpacing(0)
-        
-        h_box = QHBoxLayout()
-        h_box.setContentsMargins(0, 0, 0, 0)
-        h_box.setSpacing(0)
-        
-        self.mw.grid_layout = QGridLayout()
-        self.mw.grid_layout.setSpacing(1)
-        self.mw.grid_layout.setContentsMargins(1, 1, 1, 1)
-        
-        h_box.addLayout(self.mw.grid_layout)
-        h_box.addStretch(1) 
-        
-        main_vbox.addLayout(h_box)
-        main_vbox.addStretch(1) 
-        
-        self.mw.scroll_area.setWidget(self.mw.grid_container)
-        
-        self.mw.cell_widget_map.clear()
-        
-        if self.mw.view_mode == "ALL_WEEK": self.render_all_week()
-        elif self.mw.view_mode == "ALL_DAY": self.render_all_day()
-        elif self.mw.view_mode == "SINGLE": self.render_single()
-        elif self.mw.view_mode == "TEACHER": self.render_teacher()
-        elif self.mw.view_mode == "ALL_TEACHER": self.render_all_teacher()
-        elif self.mw.view_mode == "SUBJECT": self.render_subject()
+            if self.last_structural_fingerprint is not None and self.last_structural_fingerprint != current_fingerprint:
+                self.clear_cache()
+                
+            self.last_structural_fingerprint = current_fingerprint
+
+            combo_text = self.mw.combo_sel.currentText() if hasattr(self.mw, 'combo_sel') and getattr(self.mw.combo_sel, 'isVisible', lambda: False)() else ""
+            pinned_day = self.mw.combo_pinned_day.currentText() if hasattr(self.mw, 'combo_pinned_day') else "고정 안함"
+            only_changed = self.mw.chk_only_changed.isChecked() if hasattr(self.mw, 'chk_only_changed') else False
+            
+            new_cache_key = (self.mw.view_mode, combo_text, pinned_day, only_changed)
+
+            if self.current_cache_key == new_cache_key:
+                self.update_cell_visuals()
+            else:
+                if self.current_cache_key:
+                    old_left = self.mw.left_scroll.takeWidget()
+                    old_right = self.mw.right_scroll.takeWidget()
+                    old_h_left = self.mw.header_left_scroll.takeWidget()
+                    old_h_right = self.mw.header_right_scroll.takeWidget()
+                    
+                    self.view_caches[self.current_cache_key] = {
+                        'left': old_left, 'right': old_right, 'h_left': old_h_left, 'h_right': old_h_right,
+                        'cell_map': self.mw.cell_widget_map.copy()
+                    }
+                    self.current_cache_key = None
+
+                if new_cache_key in self.view_caches:
+                    cached = self.view_caches[new_cache_key]
+                    self.mw.left_container = cached['left']
+                    self.mw.right_container = cached['right']
+                    self.mw.header_left_container = cached['h_left']
+                    self.mw.header_right_container = cached['h_right']
+
+                    self.mw.left_layout = self.mw.left_container.layout()
+                    self.mw.right_layout = self.mw.right_container.layout()
+                    self.mw.header_left_layout = self.mw.header_left_container.layout()
+                    self.mw.header_right_layout = self.mw.header_right_container.layout()
+
+                    self.mw.left_scroll.setWidget(self.mw.left_container)
+                    self.mw.right_scroll.setWidget(self.mw.right_container)
+                    self.mw.header_left_scroll.setWidget(self.mw.header_left_container)
+                    self.mw.header_right_scroll.setWidget(self.mw.header_right_container)
+                    
+                    self.mw.cell_widget_map = cached['cell_map']
+                    self.current_cache_key = new_cache_key
+                    self.update_cell_visuals()
+
+                else:
+                    self.mw.cell_widget_map.clear()
+                    
+                    self.mw.left_container = QWidget()
+                    self.mw.left_layout = QGridLayout(self.mw.left_container)
+                    self.mw.left_layout.setSpacing(2)
+                    self.mw.left_layout.setContentsMargins(2, 2, 2, 2)
+                    
+                    self.mw.right_container = QWidget()
+                    self.mw.right_layout = QGridLayout(self.mw.right_container)
+                    self.mw.right_layout.setSpacing(2)
+                    self.mw.right_layout.setContentsMargins(2, 2, 2, 2)
+                    
+                    self.mw.header_left_container = QWidget()
+                    self.mw.header_left_layout = QGridLayout(self.mw.header_left_container)
+                    self.mw.header_left_layout.setSpacing(2)
+                    self.mw.header_left_layout.setContentsMargins(2, 2, 2, 2)
+                    
+                    self.mw.header_right_container = QWidget()
+                    self.mw.header_right_layout = QGridLayout(self.mw.header_right_container)
+                    self.mw.header_right_layout.setSpacing(2)
+                    self.mw.header_right_layout.setContentsMargins(2, 2, 2, 2)
+                    
+                    header_rows = 2 if self.mw.view_mode in ["ALL_WEEK", "ALL_DAY", "ALL_TEACHER"] else 1
+                    self.mw.header_splitter.setFixedHeight(36 * header_rows + 2 * header_rows + 2)
+                    
+                    # [핵심] 분리된 뷰 렌더링 모듈로 위임
+                    render_view(self)
+                    
+                    self.mw.left_layout.setColumnStretch(1000, 1)
+                    self.mw.right_layout.setColumnStretch(1000, 1)
+                    self.mw.header_left_layout.setColumnStretch(1000, 1)
+                    self.mw.header_right_layout.setColumnStretch(1000, 1)
+                    
+                    self.mw.left_scroll.setWidget(self.mw.left_container)
+                    self.mw.right_scroll.setWidget(self.mw.right_container)
+                    self.mw.header_left_scroll.setWidget(self.mw.header_left_container)
+                    self.mw.header_right_scroll.setWidget(self.mw.header_right_container)
+                    
+                    self.current_cache_key = new_cache_key
+
+            show_pinned = self.mw.view_mode in ["ALL_WEEK", "ALL_TEACHER"]
+            if hasattr(self.mw, 'combo_pinned_day'):
+                self.mw.combo_pinned_day.setVisible(show_pinned)
+                parent_layout = self.mw.combo_pinned_day.parentWidget().layout()
+                if parent_layout:
+                    for i in range(parent_layout.count()):
+                        item = parent_layout.itemAt(i)
+                        if item and item.widget() == self.mw.combo_pinned_day:
+                            prev_item = parent_layout.itemAt(i - 1)
+                            if prev_item and prev_item.widget() and isinstance(prev_item.widget(), QLabel):
+                                prev_item.widget().setVisible(show_pinned)
+                            break
+            
+            is_split_mode = self.mw.view_mode in ["ALL_WEEK", "ALL_TEACHER"]
+            if not is_split_mode:
+                self.mw.left_scroll.hide()
+                self.mw.header_left_scroll.hide()
+                self.mw.main_splitter.setSizes([0, 1400]) 
+                self.mw.header_splitter.setSizes([0, 1400]) 
+            else:
+                self.mw.left_scroll.show()
+                self.mw.header_left_scroll.show()
+                limit = config.PERIODS_PER_DAY.get(pinned_day, 7) if pinned_day != "고정 안함" else 0
+                if limit < 1 and pinned_day != "고정 안함": limit = 7
+                
+                if self.mw.view_mode == "ALL_TEACHER":
+                    base_width = 140; col_width = 40 
+                else:
+                    base_width = 60; col_width = 40 
+                
+                if pinned_day == "고정 안함": expected_width = base_width + 10
+                else: expected_width = base_width + (limit * col_width) + (limit * 2) + 20 
+                self.mw.main_splitter.setSizes([expected_width, 1400])
+                self.mw.header_splitter.setSizes([expected_width, 1400])
+                
+        finally:
+            QTimer.singleShot(0, QApplication.restoreOverrideCursor)
 
     def get_changed_classes(self):
         changed = set()
@@ -50,7 +207,8 @@ class GridRenderer:
         classes = self.mw.logic.get_all_sorted_classes()
         for g, c in classes:
             for day in config.DAYS:
-                limit = config.PERIODS_PER_DAY[day]
+                limit = config.PERIODS_PER_DAY.get(day, 7)
+                if limit < 1: limit = 7
                 for p in range(1, limit + 1):
                     if self.mw.logic.is_changed(g, c, day, p):
                         changed.add((str(g), str(c)))
@@ -62,19 +220,17 @@ class GridRenderer:
         classes = self.mw.logic.get_all_sorted_classes()
         for g, c in classes:
             for day in config.DAYS:
-                limit = config.PERIODS_PER_DAY[day]
+                limit = config.PERIODS_PER_DAY.get(day, 7)
+                if limit < 1: limit = 7
                 for p in range(1, limit + 1):
                     if self.mw.logic.is_changed(g, c, day, p):
                         curr = self.mw.logic.schedule[str(g)][str(c)][day].get(p)
-                        if curr and curr.get('teacher'):
-                            changed.add(curr['teacher'])
-                        
+                        if curr and curr.get('teacher'): changed.add(curr['teacher'])
                         orig_g = self.mw.logic.original_schedule.get(str(g), {})
                         orig_c = orig_g.get(str(c), {})
                         orig_d = orig_c.get(day, {})
                         orig_p = orig_d.get(p)
-                        if orig_p and orig_p.get('teacher'):
-                            changed.add(orig_p['teacher'])
+                        if orig_p and orig_p.get('teacher'): changed.add(orig_p['teacher'])
         return changed    
 
     def update_cell_visuals(self):
@@ -82,355 +238,313 @@ class GridRenderer:
             self._update_single_cell(cell_widget, key)
 
     def _update_single_cell(self, cell, key):
+        is_locked_cell = False
+        
         if isinstance(key, tuple) and key[0] == "TEACHER_VIEW":
             _, teacher_name, day, period = key
             locations = list(self.mw.logic.teachers_schedule.get(teacher_name, {}).get(day, {}).get(period, set()))
             
+            # [수정] 정상반(우선)과 제외된 반을 분리
+            normal_locs = [loc for loc in locations if not self.mw.logic.is_excluded(loc[0], day)]
+            excluded_locs = [loc for loc in locations if self.mw.logic.is_excluded(loc[0], day)]
+            
+            target_locs = normal_locs if normal_locs else excluded_locs
+            
             bg_color = COLORS["cell_default"]
-            border_color = "#e5e7eb"
+            border_color = "rgba(226, 232, 240, 0.8)" 
             border_width = 1
-            text_color = "#1f2937"
+            text_color = COLORS["text_primary"]
             main_text, sub_text = "", ""
             real_key = None
 
-            if locations:
-                g, c = locations[0]
+            if target_locs:
+                g, c = target_locs[0]
                 data = self.mw.logic.schedule[str(g)][str(c)][day].get(period)
                 if data:
                     main_text, sub_text = data['subject'], f"{g}-{c}"
                     real_key = (str(g), str(c), day, period)
                     
-                    if self.mw.logic.is_locked(g, c, day, period):
-                        bg_color = COLORS["cell_locked"]
-                        main_text = "🔒 " + main_text
-                    if self.mw.logic.is_changed(g, c, day, period):
+                    # [수정] 정상 반도 있고 제외 반도 같이 있는 경우(허용된 겹침) '*' 기호 및 색상 강조
+                    if normal_locs and excluded_locs:
+                        main_text += "*"
+                        sub_text += "*"
+                        border_color = "#10b981"; border_width = 2 # 초록색으로 허용된 겹침 표시
+                    elif len(normal_locs) > 1:
+                        border_color = "#ef4444"; border_width = 2
+                        
+                    if self.mw.logic.is_excluded(g, day):
+                        bg_color = COLORS["cell_excluded"]; text_color = "#94a3b8"
+                    elif self.mw.logic.is_changed(g, c, day, period):
                         bg_color = COLORS["cell_changed"]
-                    if len(locations) > 1:
-                        border_color = "#ef4444"
-                        border_width = 2
+                    if self.mw.logic.is_locked(g, c, day, period):
+                        is_locked_cell = True
 
             if real_key and self.mw.swap_source == real_key:
-                bg_color = COLORS["cell_selected"]
-                border_color, border_width = COLORS["accent"], 2
+                bg_color = COLORS["cell_selected"]; border_color, border_width = COLORS["accent"], 2
             elif self.mw.work_mode == "SWAP" and self.mw.swap_source:
                 src_g, src_c, _, _ = self.mw.swap_source
                 if real_key and (str(g), str(c)) == (src_g, src_c) and (day, period) in self.mw.swap_candidates:
-                    bg_color = COLORS["cell_target"]
-                    border_color = "#10b981"
+                    bg_color = COLORS["cell_target"]; border_color = "#10b981"
             elif self.mw.work_mode == "CHAIN" and self.mw.chain_floating_data:
                 orig_g, orig_c = self.mw.chain_floating_data['origin_gc']
                 orig_d, orig_p = self.mw.chain_floating_data['origin_time']
                 floater = self.mw.chain_floating_data['teacher']
-                
                 if day == orig_d and period == orig_p and teacher_name == floater:
                     bg_color = COLORS["cell_chain_tgt"] 
                 elif teacher_name == floater:
-                    if not self.mw.logic.is_locked(orig_g, orig_c, day, period):
-                        bg_color = COLORS["cell_target"] 
-                        border_color = "#10b981"
+                    if real_key and not self.mw.logic.is_locked(str(g), str(c), day, period) and not self.mw.logic.is_excluded(str(g), day):
+                        bg_color = COLORS["cell_target"]; border_color = "#10b981"
 
             if teacher_name and teacher_name in self.mw.highlighted_teachers:
-                if bg_color in [COLORS["cell_default"], COLORS["cell_locked"], COLORS["cell_changed"], COLORS["cell_conflict"]]:
+                if bg_color in [COLORS["cell_default"], COLORS["cell_changed"], COLORS["cell_conflict"]]:
                     bg_color = self.mw.highlighted_teachers[teacher_name]
                     if bg_color == COLORS["cell_selected"]: border_color = COLORS["accent"]
 
             if teacher_name and self.mw.logic.check_consecutive_classes(teacher_name, day, period):
-                text_color = "#9333ea" 
-
-            cell.set_content(main_text, sub_text, bg_color, border_color, border_width, text_color)
-            return
+                text_color = "#7c3aed" 
+        else:
+            grade, cls, day, period = key
+            grade, cls, period = str(grade), str(cls), int(period)
+            data = self.mw.logic.schedule[grade][cls][day].get(period)
             
-        grade, cls, day, period = key
-        grade, cls = str(grade), str(cls)
-        period = int(period)
-        data = self.mw.logic.schedule[grade][cls][day].get(period)
-        
-        main_text, sub_text = "", ""
-        teacher_name = data['teacher'] if data else None
+            main_text, sub_text = "", ""
+            teacher_name = data['teacher'] if data else None
+            
+            # [수정] 해당 교사가 이 시간에 제외 학년의 다른 수업도 맡고 있는지 확인
+            has_excluded_class = False
+            if teacher_name:
+                t_sched = self.mw.logic.teachers_schedule.get(teacher_name, {})
+                if day in t_sched and period in t_sched[day]:
+                    for other_g, other_c in t_sched[day][period]:
+                        if (str(other_g), str(other_c)) != (str(grade), str(cls)) and self.mw.logic.is_excluded(other_g, day):
+                            has_excluded_class = True
+                            break
 
-        if data:
-            if self.mw.view_mode in ["TEACHER", "ALL_TEACHER"]:
-                main_text, sub_text = data['subject'], f"{grade}-{cls}"
-            else:
-                main_text, sub_text = data['subject'], teacher_name
+            if data:
+                display_teacher = f"{teacher_name}*" if has_excluded_class else teacher_name
+                if self.mw.view_mode in ["TEACHER", "ALL_TEACHER"]:
+                    main_text, sub_text = data['subject'], f"{grade}-{cls}"
+                else:
+                    main_text, sub_text = data['subject'], display_teacher
 
-        bg_color = COLORS["cell_default"]
-        border_color = "#e5e7eb"
-        border_width = 1
-        text_color = "#1f2937" 
+            bg_color = COLORS["cell_default"]
+            border_color = "rgba(226, 232, 240, 0.8)"
+            border_width = 1
+            text_color = COLORS["text_primary"]
 
-        if self.mw.logic.is_locked(grade, cls, day, period):
-            bg_color = COLORS["cell_locked"]
-            main_text = "🔒 " + main_text
-        if self.mw.logic.is_changed(grade, cls, day, period):
-            bg_color = COLORS["cell_changed"]
+            if self.mw.logic.is_excluded(grade, day):
+                bg_color = COLORS["cell_excluded"]; text_color = "#94a3b8"
+            elif self.mw.logic.is_changed(grade, cls, day, period):
+                bg_color = COLORS["cell_changed"]
+            if self.mw.logic.is_locked(grade, cls, day, period):
+                is_locked_cell = True
 
-        if teacher_name:
-            t_sched = self.mw.logic.teachers_schedule.get(teacher_name, {})
-            if day in t_sched and period in t_sched[day]:
-                if len(t_sched[day][period]) > 1:
-                    border_color = "#ef4444"
-                    border_width = 2
+            if teacher_name:
+                t_sched = self.mw.logic.teachers_schedule.get(teacher_name, {})
+                if day in t_sched and period in t_sched[day]:
+                    # [수정] 교사 충돌 표시 시, 제외반+정상반의 허용된 겹침은 초록 테두리로 표시
+                    normal_locs = [loc for loc in t_sched[day][period] if not self.mw.logic.is_excluded(loc[0], day)]
+                    excluded_locs = [loc for loc in t_sched[day][period] if self.mw.logic.is_excluded(loc[0], day)]
+                    if len(normal_locs) > 1:
+                        border_color = "#ef4444"; border_width = 2
+                    elif len(normal_locs) == 1 and excluded_locs:
+                        border_color = "#10b981"; border_width = 2
 
-        if self.mw.swap_source == key:
-            bg_color = COLORS["cell_selected"]
-            border_color, border_width = COLORS["accent"], 2
-        elif self.mw.work_mode == "SWAP" and self.mw.swap_source:
-             src_g, src_c, _, _ = self.mw.swap_source
-             if (grade, cls) == (src_g, src_c) and (day, period) in self.mw.swap_candidates:
-                 bg_color = COLORS["cell_target"]
-                 border_color = "#10b981"
-        elif self.mw.work_mode == "COVER" and self.mw.selected_cell_info == key:
-            bg_color = COLORS["cell_conflict"]
-            border_color, border_width = "#ef4444", 2
-        elif self.mw.work_mode == "CHAIN" and self.mw.chain_floating_data:
-            orig_g, orig_c = self.mw.chain_floating_data['origin_gc']
-            orig_d, orig_p = self.mw.chain_floating_data['origin_time']
-            floater = self.mw.chain_floating_data['teacher']
-            if key == (str(orig_g), str(orig_c), orig_d, orig_p):
-                bg_color = COLORS["cell_chain_tgt"]
-            elif (grade, cls) == (str(orig_g), str(orig_c)):
-                 if not self.mw.logic.is_locked(grade, cls, day, period):
-                     if self.mw.logic.is_teacher_busy(floater, day, period):
-                         bg_color = COLORS["cell_conflict"]
-                     else:
-                         bg_color = COLORS["cell_target"]
-            if teacher_name == floater:
-                bg_color = COLORS["cell_chain_src"]
+            if self.mw.swap_source == key:
+                bg_color = COLORS["cell_selected"]; border_color, border_width = COLORS["accent"], 2
+            elif self.mw.work_mode == "SWAP" and self.mw.swap_source:
+                 src_g, src_c, _, _ = self.mw.swap_source
+                 if (grade, cls) == (src_g, src_c) and (day, period) in self.mw.swap_candidates:
+                     bg_color = COLORS["cell_target"]; border_color = "#10b981"
+            elif self.mw.work_mode == "COVER" and self.mw.selected_cell_info == key:
+                bg_color = COLORS["cell_conflict"]; border_color, border_width = "#ef4444", 2
+            elif self.mw.work_mode == "CHAIN" and self.mw.chain_floating_data:
+                orig_g, orig_c = self.mw.chain_floating_data['origin_gc']
+                orig_d, orig_p = self.mw.chain_floating_data['origin_time']
+                floater = self.mw.chain_floating_data['teacher']
+                if key == (str(orig_g), str(orig_c), orig_d, orig_p):
+                    bg_color = COLORS["cell_chain_tgt"]
+                elif (grade, cls) == (str(orig_g), str(orig_c)):
+                     if not self.mw.logic.is_locked(grade, cls, day, period) and not self.mw.logic.is_excluded(grade, day):
+                         if self.mw.logic.is_teacher_busy(floater, day, period):
+                             bg_color = COLORS["cell_conflict"]
+                         else:
+                             bg_color = COLORS["cell_target"]
+                if teacher_name == floater:
+                    bg_color = COLORS["cell_chain_src"]
 
-        if teacher_name and teacher_name in self.mw.highlighted_teachers:
-             if bg_color in [COLORS["cell_default"], COLORS["cell_locked"], COLORS["cell_changed"], COLORS["cell_conflict"]]:
-                 bg_color = self.mw.highlighted_teachers[teacher_name]
-                 if bg_color == COLORS["cell_selected"]: border_color = COLORS["accent"]
-
-        if teacher_name and self.mw.logic.check_consecutive_classes(teacher_name, day, period):
-             text_color = "#9333ea" 
+            if teacher_name and teacher_name in self.mw.highlighted_teachers:
+                 if bg_color in [COLORS["cell_default"], COLORS["cell_changed"], COLORS["cell_conflict"], COLORS["cell_excluded"]]:
+                     bg_color = self.mw.highlighted_teachers[teacher_name]
+                     if bg_color == COLORS["cell_selected"]: border_color = COLORS["accent"]
+            if teacher_name and self.mw.logic.check_consecutive_classes(teacher_name, day, period):
+                 text_color = "#7c3aed" 
 
         cell.set_content(main_text, sub_text, bg_color, border_color, border_width, text_color)
 
-    # [수정] font_size 파라미터를 추가하여 특정 헤더의 텍스트 크기를 조절할 수 있도록 개선
-    def add_header(self, text, r, c, rowspan=1, colspan=1, font_size=None):
-        lbl = QLabel(text)
+        watermark = cell.findChild(QLabel, "LockWatermark")
+        if is_locked_cell:
+            if not watermark:
+                watermark = QLabel("🔒", cell)
+                watermark.setObjectName("LockWatermark")
+                watermark.setStyleSheet("font-size: 18px; background: transparent;")
+                watermark.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                watermark.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+                
+                effect = QGraphicsOpacityEffect(watermark)
+                effect.setOpacity(0.3) 
+                watermark.setGraphicsEffect(effect)
+                
+                filter_obj = WatermarkFilter(watermark)
+                cell.installEventFilter(filter_obj)
+                watermark.filter_obj = filter_obj 
+                watermark._is_visible = False
+                
+            if getattr(watermark, '_last_size', None) != cell.size():
+                watermark.resize(cell.size())
+                watermark._last_size = cell.size()
+                
+            watermark.lower()
+            if not getattr(watermark, '_is_visible', False):
+                watermark.show()
+                watermark._is_visible = True
+        else:
+            if watermark:
+                if getattr(watermark, '_is_visible', True):
+                    watermark.hide()
+                    watermark._is_visible = False
+
+    def add_header(self, text, r, c, rowspan=1, colspan=1, font_size=None, is_pinned=None):
+        if self.header_pool:
+            lbl = self.header_pool.pop()
+            lbl.setText(text)
+        else:
+            lbl = QLabel(text)
+            
         lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        font_style = f"font-size: {font_size};" if font_size else ""
-        lbl.setStyleSheet(f"background-color: #e5e7eb; font-weight: bold; border: 1px solid #d1d5db; color: #1f2937; {font_style}")
-        lbl.setMinimumHeight(26)
-        if len(text) > 4: lbl.setMinimumWidth(80) 
-        else: lbl.setMinimumWidth(40)
-        self.mw.grid_layout.addWidget(lbl, r, c, rowspan, colspan)
+        lbl.setObjectName("GridHeader") # [수정] 스타일시트 적용을 위한 ObjectName
+        if font_size:
+            lbl.setStyleSheet(f"font-size: {font_size};")
+        else:
+            lbl.setStyleSheet("") # 인라인 초기화
+            
+        lbl.setFixedHeight(36 * rowspan + (rowspan - 1))
+        
+        if c == 0:
+            if self.mw.view_mode == "ALL_TEACHER": lbl.setFixedWidth(140)
+            else: lbl.setFixedWidth(60)
+        elif colspan == 1:
+            cell_width = 40 if self.mw.view_mode in ["ALL_WEEK", "ALL_TEACHER"] else 90 
+            lbl.setFixedWidth(cell_width)
+        
+        pinned_day = "고정 안함"
+        if hasattr(self.mw, 'combo_pinned_day'):
+            pinned_day = self.mw.combo_pinned_day.currentText()
+        is_split_mode = self.mw.view_mode in ["ALL_WEEK", "ALL_TEACHER"]
 
-    def add_cell(self, grade, cls, day, period, r, c, rowspan=1, colspan=1):
+        if is_pinned is None: is_pinned = (c == 0)
+        if not is_split_mode: is_pinned = False
+            
+        header_rows = 2 if self.mw.view_mode in ["ALL_WEEK", "ALL_DAY", "ALL_TEACHER"] else 1
+        
+        if r < header_rows:
+            target_layout = self.mw.header_left_layout if is_pinned else self.mw.header_right_layout
+            r_idx = r
+        else:
+            target_layout = self.mw.left_layout if is_pinned else self.mw.right_layout
+            r_idx = r - header_rows
+            
+        target_layout.addWidget(lbl, r_idx, c, rowspan, colspan)
+        lbl.show()
+
+    def add_cell(self, grade, cls, day, period, r, c, rowspan=1, colspan=1, is_pinned=None):
         key = (str(grade), str(cls), day, int(period))
-        cell = ClickableFrame(key)
+        
+        if self.cell_pool:
+            cell = self.cell_pool.pop()
+            cell.data_key = key
+        else:
+            cell = ClickableFrame(key)
+            # 신규 생성 시에만 시그널을 연결하여 경고 메시지 방지
+            cell.clicked.connect(self.mw.interaction_handler.handle_cell_click)
+            cell.right_clicked.connect(self.mw.interaction_handler.handle_right_click)
+            cell.cell_dropped.connect(self.mw.interaction_handler.handle_cell_drop)
+            
         self._update_single_cell(cell, key)
-        cell.clicked.connect(self.mw.interaction_handler.handle_cell_click)
-        cell.right_clicked.connect(self.mw.interaction_handler.handle_right_click)
-        # [업데이트] 드롭 시그널 연결
-        cell.cell_dropped.connect(self.mw.interaction_handler.handle_cell_drop)
-        self.mw.grid_layout.addWidget(cell, r, c, rowspan, colspan)
+        
+        cell.setFixedHeight(36)
+        cell_width = 40 if self.mw.view_mode in ["ALL_WEEK", "ALL_TEACHER"] else 90
+        cell.setFixedWidth(cell_width) 
+        
+        pinned_day = "고정 안함"
+        if hasattr(self.mw, 'combo_pinned_day'):
+            pinned_day = self.mw.combo_pinned_day.currentText()
+        is_split_mode = self.mw.view_mode in ["ALL_WEEK", "ALL_TEACHER"]
+
+        if is_pinned is None: is_pinned = (c == 0)
+        if not is_split_mode: is_pinned = False
+            
+        header_rows = 2 if self.mw.view_mode in ["ALL_WEEK", "ALL_DAY", "ALL_TEACHER"] else 1
+        target_layout = self.mw.left_layout if is_pinned else self.mw.right_layout
+        r_idx = r - header_rows
+        
+        target_layout.addWidget(cell, r_idx, c, rowspan, colspan)
         self.mw.cell_widget_map[key] = cell
+        cell.show()
 
-    def render_all_week(self):
-        self.add_header("학반", 0, 0)
-        self.mw.grid_layout.setColumnMinimumWidth(0, 50)
+    def get_base_grades(self, classes):
+        unique_grades = sorted(list(set([str(g) for g, c in classes])))
+        base_grades = []
+        for g in unique_grades:
+            m = re.search(r'\d+', g)
+            if m and m.group(0) not in base_grades: base_grades.append(m.group(0))
+        return base_grades
+
+    def create_day_control_widget(self, day, base_grades):
+        control_widget = QWidget()
+        control_widget.setObjectName("DayControl")
+        control_widget.setFixedHeight(36)
+        control_widget.setMinimumWidth(10)
+        control_widget.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         
-        classes = self.mw.logic.get_all_sorted_classes()
+        control_layout = QHBoxLayout(control_widget)
+        control_layout.setContentsMargins(6, 0, 6, 0)
+        control_layout.setSpacing(4)
         
-        if hasattr(self.mw, 'chk_only_changed') and self.mw.chk_only_changed.isChecked():
-            changed_set = self.get_changed_classes()
-            classes = [cls for cls in classes if (str(cls[0]), str(cls[1])) in changed_set]
+        lbl_day = QLabel(f"<b>{day}</b>")
+        lbl_day.setObjectName("DayLabel")
+        control_layout.addWidget(lbl_day)
+
+        if base_grades:
+            lbl_excl = QLabel("제외:")
+            lbl_excl.setObjectName("ExclLabel")
+            control_layout.addWidget(lbl_excl)
             
-            if not classes:
-                lbl = QLabel("현재 변경된 학급 수업이 없습니다.")
-                lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                lbl.setStyleSheet("font-size: 14px; font-weight: bold; color: #6b7280; padding: 20px;")
-                self.mw.grid_layout.addWidget(lbl, 1, 0, 1, 10)
-                return
-        
-        total_rows = len(classes) + 1  
-
-        col = 1
-        for day in config.DAYS:
-            limit = config.PERIODS_PER_DAY[day]
-            for p in range(1, limit + 1):
-                self.add_header(f"{day}{p}", 0, col)
-                col += 1
-            if day != config.DAYS[-1]:
-                lbl = QLabel()
-                lbl.setFixedWidth(5)
-                lbl.setStyleSheet("background-color: #d1d5db;")
-                self.mw.grid_layout.addWidget(lbl, 0, col, total_rows, 1)
-                col += 1
-        
-        for r, (g, c) in enumerate(classes):
-            row = r + 1
-            self.add_header(f"{g}-{c}", row, 0)
-            col = 1
-            for day in config.DAYS:
-                limit = config.PERIODS_PER_DAY[day]
-                for p in range(1, limit + 1):
-                    self.add_cell(g, c, day, p, row, col)
-                    col += 1
-                if day != config.DAYS[-1]: col += 1
-
-    def render_all_teacher(self):
-        # [수정] 폰트 사이즈를 9pt로 줄이고, 제목 텍스트 간소화
-        self.add_header("교사(과목,시수)", 0, 0, font_size="9pt")
-        # [수정] 한 줄로 표시하기 위해 가로 폭을 충분히 넓힘 (105 -> 120)
-        self.mw.grid_layout.setColumnMinimumWidth(0, 120) 
-        
-        # [수정] 사용자가 선택한 정렬 방식 적용
-        sort_mode = getattr(self.mw, 'teacher_sort_mode', "과목순")
-        teachers = self.mw.logic.get_sorted_teachers(sort_mode)
-        
-        if hasattr(self.mw, 'chk_only_changed') and self.mw.chk_only_changed.isChecked():
-            changed_set = self.get_changed_teachers()
-            teachers = [t for t in teachers if t in changed_set]
+            for bg in base_grades:
+                chk = QCheckBox(f"{bg}")
+                chk.setObjectName("ExclCheck")
+                if bg in self.mw.logic.excluded_groups.get(day, set()):
+                    chk.setChecked(True)
+                chk.toggled.connect(lambda checked, d=day, g=bg: self.mw.toggle_excluded_grade(d, g, checked))
+                control_layout.addWidget(chk)
             
-            if not teachers:
-                lbl = QLabel("현재 변경된 교사 수업이 없습니다.")
-                lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                lbl.setStyleSheet("font-size: 14px; font-weight: bold; color: #6b7280; padding: 20px;")
-                self.mw.grid_layout.addWidget(lbl, 1, 0, 1, 10)
-                return
+        control_layout.addStretch()
         
-        total_rows = len(teachers) + 1
+        btn_replace = QPushButton("🔄변경")
+        btn_replace.setObjectName("ReplaceBtn")
+        btn_replace.clicked.connect(lambda checked, d=day: self.mw.change_day_routine_for(d))
+        control_layout.addWidget(btn_replace)
         
-        col = 1
-        for day in config.DAYS:
-            limit = config.PERIODS_PER_DAY[day]
-            for p in range(1, limit + 1):
-                self.add_header(f"{day}{p}", 0, col)
-                col += 1
-            
-            if day != config.DAYS[-1]:
-                lbl = QLabel()
-                lbl.setFixedWidth(5)
-                lbl.setStyleSheet("background-color: #d1d5db;")
-                self.mw.grid_layout.addWidget(lbl, 0, col, total_rows, 1) 
-                col += 1
+        return control_widget
 
-        for r, teacher in enumerate(teachers):
-            row = r + 1
-            subj = self.mw.logic.get_teacher_primary_subject(teacher)
-            count = self.mw.logic.get_teacher_class_count(teacher)
-            
-            # [수정] 개행문자(\n)를 제거하여 한 줄로 표시 (셀 높이 축소를 통해 표시 가능 행 수 증가)
-            if subj:
-                display_text = f"{teacher} ({subj},{count}h)"
-            else:
-                display_text = f"{teacher} ({count}h)"
-                
-            # [수정] 폰트 크기를 1포인트(10pt -> 9pt) 줄임
-            self.add_header(display_text, row, 0, font_size="9pt")
-            
-            col = 1
-            for day in config.DAYS:
-                limit = config.PERIODS_PER_DAY[day]
-                for p in range(1, limit + 1):
-                    key = ("TEACHER_VIEW", teacher, day, p)
-                    cell = ClickableFrame(key)
-                    self._update_single_cell(cell, key)
-                    cell.clicked.connect(self.mw.interaction_handler.handle_cell_click)
-                    cell.right_clicked.connect(self.mw.interaction_handler.handle_right_click)
-                    # [업데이트] 교사 뷰에서도 드롭 시그널 연결
-                    cell.cell_dropped.connect(self.mw.interaction_handler.handle_cell_drop)
-                    self.mw.grid_layout.addWidget(cell, row, col)
-                    self.mw.cell_widget_map[key] = cell
-                    col += 1
-                
-                if day != config.DAYS[-1]:
-                    col += 1
-
-    def render_all_day(self):
-        if not hasattr(self.mw, 'combo_sel'): return
-        target_day = self.mw.combo_sel.currentText()
-        if not target_day: return
-        self.add_header("학반", 0, 0)
-        self.mw.grid_layout.setColumnMinimumWidth(0, 50)
-        limit = config.PERIODS_PER_DAY[target_day]
-        for p in range(1, limit + 1):
-            self.add_header(f"{p}교시", 0, p)
-        classes = self.mw.logic.get_all_sorted_classes()
-        for r, (g, c) in enumerate(classes):
-            row = r + 1
-            self.add_header(f"{g}-{c}", row, 0)
-            for p in range(1, limit + 1):
-                self.add_cell(g, c, target_day, p, row, p)
-
-    def render_single(self):
-        if not hasattr(self.mw, 'combo_sel'): return
-        cls_str = self.mw.combo_sel.currentText()
-        if not cls_str: return
-        try: g, c = cls_str.split('-')
-        except: return
-        self.add_header("교시", 0, 0)
-        for i, day in enumerate(config.DAYS):
-            self.add_header(day, 0, i+1)
-            self.mw.grid_layout.setColumnMinimumWidth(i+1, 120)
-        for p in range(1, config.MAX_PERIODS + 1):
-            self.add_header(f"{p}교시", p, 0)
-            for i, day in enumerate(config.DAYS):
-                if p <= config.PERIODS_PER_DAY[day]:
-                    self.add_cell(g, c, day, p, p, i+1)
-
-    def render_teacher(self):
-        if not hasattr(self.mw, 'combo_sel'): return
-        t_name = self.mw.combo_sel.currentText()
-        if not t_name: return
-        self.add_header("교시", 0, 0)
-        for i, day in enumerate(config.DAYS):
-            self.add_header(day, 0, i+1)
-            self.mw.grid_layout.setColumnMinimumWidth(i+1, 120)
-        for p in range(1, config.MAX_PERIODS + 1):
-            self.add_header(f"{p}교시", p, 0)
-            for i, day in enumerate(config.DAYS):
-                found = False
-                if t_name in self.mw.logic.teachers_schedule:
-                    if day in self.mw.logic.teachers_schedule[t_name]:
-                        if p in self.mw.logic.teachers_schedule[t_name][day]:
-                            class_set = self.mw.logic.teachers_schedule[t_name][day][p]
-                            if class_set:
-                                info = list(class_set)[0]
-                                g, c = str(info[0]), str(info[1])
-                                self.add_cell(g, c, day, p, p, i+1)
-                                found = True
-                if not found and p <= config.PERIODS_PER_DAY[day]:
-                    empty = QLabel()
-                    empty.setStyleSheet(f"background-color: {COLORS['cell_default']}; border: 1px solid #e5e7eb;")
-                    self.mw.grid_layout.addWidget(empty, p, i+1)
-
-    def render_subject(self):
-        if not hasattr(self.mw, 'combo_sel'): return
-        subj_name = self.mw.combo_sel.currentText()
-        if not subj_name: return
-
-        self.add_header("교시", 0, 0)
-        for i, day in enumerate(config.DAYS):
-            self.add_header(day, 0, i+1)
-            self.mw.grid_layout.setColumnMinimumWidth(i+1, 120)
-
-        for p in range(1, config.MAX_PERIODS + 1):
-            self.add_header(f"{p}교시", p, 0)
-            for i, day in enumerate(config.DAYS):
-                if p <= config.PERIODS_PER_DAY[day]:
-                    matches = []
-                    classes = self.mw.logic.get_all_sorted_classes()
-                    for g, c in classes:
-                        day_sched = self.mw.logic.schedule[str(g)][str(c)].get(day, {})
-                        info = day_sched.get(p)
-                        if info:
-                            target_subject = info.get('subject')
-                            if self.mw.is_subject_similar(target_subject, subj_name):
-                                matches.append(f"{g}-{c}({info['teacher']})")
-                    
-                    if matches:
-                        lbl = QLabel("\n".join(matches))
-                        lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                        lbl.setWordWrap(True)
-                        lbl.setStyleSheet(f"background-color: {COLORS['cell_default']}; border: 1px solid #e5e7eb; font-size: 11px; padding: 2px;")
-                        self.mw.grid_layout.addWidget(lbl, p, i+1)
-                    else:
-                        empty = QLabel()
-                        empty.setStyleSheet(f"background-color: {COLORS['cell_default']}; border: 1px solid #e5e7eb;")
-                        self.mw.grid_layout.addWidget(empty, p, i+1)
+    def _get_empty_label(self, width):
+        if self.header_pool:
+            empty = self.header_pool.pop()
+            empty.setText("")
+        else:
+            empty = QLabel()
+        empty.setObjectName("EmptyCell")
+        empty.setStyleSheet("")
+        empty.setFixedHeight(36)
+        empty.setFixedWidth(width)
+        return empty
