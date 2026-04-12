@@ -156,6 +156,12 @@ class GridRenderer:
                     self.mw.header_left_layout.setColumnStretch(1000, 1)
                     self.mw.header_right_layout.setColumnStretch(1000, 1)
                     
+                    # [수정] 데이터가 적을 때 상단으로 정렬되도록 남는 수직 공간을 맨 아래로 밀어냅니다.
+                    self.mw.left_layout.setRowStretch(1000, 1)
+                    self.mw.right_layout.setRowStretch(1000, 1)
+                    self.mw.header_left_layout.setRowStretch(1000, 1)
+                    self.mw.header_right_layout.setRowStretch(1000, 1)
+                    
                     self.mw.left_scroll.setWidget(self.mw.left_container)
                     self.mw.right_scroll.setWidget(self.mw.right_container)
                     self.mw.header_left_scroll.setWidget(self.mw.header_left_container)
