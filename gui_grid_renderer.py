@@ -38,7 +38,11 @@ class GridRenderer:
                     widget.hide()
                     widget.setParent(None)
                     
-                    wm = widget.findChild(QLabel, "LockWatermark")
+                    wm = getattr(widget, '_lock_watermark', None)
+                    if not wm:
+                        wm = widget.findChild(QLabel, "LockWatermark")
+                        widget._lock_watermark = wm
+                        
                     if wm: 
                         wm.hide()
                         wm._is_visible = False
@@ -148,7 +152,6 @@ class GridRenderer:
                     header_rows = 2 if self.mw.view_mode in ["ALL_WEEK", "ALL_DAY", "ALL_TEACHER"] else 1
                     self.mw.header_splitter.setFixedHeight(36 * header_rows + 2 * header_rows + 2)
                     
-                    # [핵심] 분리된 뷰 렌더링 모듈로 위임
                     render_view(self)
                     
                     self.mw.left_layout.setColumnStretch(1000, 1)
@@ -156,7 +159,6 @@ class GridRenderer:
                     self.mw.header_left_layout.setColumnStretch(1000, 1)
                     self.mw.header_right_layout.setColumnStretch(1000, 1)
                     
-                    # [수정] 데이터가 적을 때 상단으로 정렬되도록 남는 수직 공간을 맨 아래로 밀어냅니다.
                     self.mw.left_layout.setRowStretch(1000, 1)
                     self.mw.right_layout.setRowStretch(1000, 1)
                     self.mw.header_left_layout.setRowStretch(1000, 1)
@@ -250,7 +252,6 @@ class GridRenderer:
             _, teacher_name, day, period = key
             locations = list(self.mw.logic.teachers_schedule.get(teacher_name, {}).get(day, {}).get(period, set()))
             
-            # [수정] 정상반(우선)과 제외된 반을 분리
             normal_locs = [loc for loc in locations if not self.mw.logic.is_excluded(loc[0], day)]
             excluded_locs = [loc for loc in locations if self.mw.logic.is_excluded(loc[0], day)]
             
@@ -270,11 +271,10 @@ class GridRenderer:
                     main_text, sub_text = data['subject'], f"{g}-{c}"
                     real_key = (str(g), str(c), day, period)
                     
-                    # [수정] 정상 반도 있고 제외 반도 같이 있는 경우(허용된 겹침) '*' 기호 및 색상 강조
                     if normal_locs and excluded_locs:
                         main_text += "*"
                         sub_text += "*"
-                        border_color = "#10b981"; border_width = 2 # 초록색으로 허용된 겹침 표시
+                        border_color = "#10b981"; border_width = 2 
                     elif len(normal_locs) > 1:
                         border_color = "#ef4444"; border_width = 2
                         
@@ -295,16 +295,34 @@ class GridRenderer:
                 orig_g, orig_c = self.mw.chain_floating_data['origin_gc']
                 orig_d, orig_p = self.mw.chain_floating_data['origin_time']
                 floater = self.mw.chain_floating_data['teacher']
+                
+                is_ai_mode = getattr(self.mw, 'use_ai_mode', False)
+                is_valid_day = (day == orig_d) if is_ai_mode else True
+
                 if day == orig_d and period == orig_p and teacher_name == floater:
                     bg_color = COLORS["cell_chain_tgt"] 
-                elif teacher_name == floater:
-                    if real_key and not self.mw.logic.is_locked(str(g), str(c), day, period) and not self.mw.logic.is_excluded(str(g), day):
-                        bg_color = COLORS["cell_target"]; border_color = "#10b981"
+                elif teacher_name == floater and is_valid_day:
+                    if self.mw.logic.is_excluded(orig_g, day):
+                        bg_color = COLORS["cell_excluded"]
+                        text_color = "#94a3b8"
+                    elif self.mw.logic.is_locked(str(orig_g), str(orig_c), day, period):
+                        bg_color = "#cbd5e1"  # 회색 배경 (잠금)
+                    else:
+                        other_classes = list(self.mw.logic.teachers_schedule.get(floater, {}).get(day, {}).get(period, set()))
+                        is_other_locked = any(self.mw.logic.is_locked(str(og), str(oc), day, period) for og, oc in other_classes)
+                        if is_other_locked:
+                            bg_color = "#cbd5e1" 
+                        elif self.mw.logic.is_teacher_busy(floater, day, period, ignore_grade=orig_g, ignore_class=orig_c):
+                            bg_color = COLORS["cell_conflict"]  
+                        else:
+                            bg_color = COLORS["cell_target"]    
+                            border_color = "#10b981"
+                            border_width = 2
 
             if teacher_name and teacher_name in self.mw.highlighted_teachers:
                 if bg_color in [COLORS["cell_default"], COLORS["cell_changed"], COLORS["cell_conflict"]]:
                     bg_color = self.mw.highlighted_teachers[teacher_name]
-                    if bg_color == COLORS["cell_selected"]: border_color = COLORS["accent"]
+                    if bg_color in [COLORS["cell_selected"], COLORS.get("cell_cover")]: border_color = COLORS["accent"]
 
             if teacher_name and self.mw.logic.check_consecutive_classes(teacher_name, day, period):
                 text_color = "#7c3aed" 
@@ -316,7 +334,6 @@ class GridRenderer:
             main_text, sub_text = "", ""
             teacher_name = data['teacher'] if data else None
             
-            # [수정] 해당 교사가 이 시간에 제외 학년의 다른 수업도 맡고 있는지 확인
             has_excluded_class = False
             if teacher_name:
                 t_sched = self.mw.logic.teachers_schedule.get(teacher_name, {})
@@ -328,6 +345,11 @@ class GridRenderer:
 
             if data:
                 display_teacher = f"{teacher_name}*" if has_excluded_class else teacher_name
+                
+                hr_teacher = self.mw.logic.homeroom_teachers.get(str(grade), {}).get(str(cls))
+                if hr_teacher and teacher_name == hr_teacher:
+                    display_teacher = f"<u>{display_teacher}</u>"
+
                 if self.mw.view_mode in ["TEACHER", "ALL_TEACHER"]:
                     main_text, sub_text = data['subject'], f"{grade}-{cls}"
                 else:
@@ -348,7 +370,6 @@ class GridRenderer:
             if teacher_name:
                 t_sched = self.mw.logic.teachers_schedule.get(teacher_name, {})
                 if day in t_sched and period in t_sched[day]:
-                    # [수정] 교사 충돌 표시 시, 제외반+정상반의 허용된 겹침은 초록 테두리로 표시
                     normal_locs = [loc for loc in t_sched[day][period] if not self.mw.logic.is_excluded(loc[0], day)]
                     excluded_locs = [loc for loc in t_sched[day][period] if self.mw.logic.is_excluded(loc[0], day)]
                     if len(normal_locs) > 1:
@@ -363,32 +384,43 @@ class GridRenderer:
                  if (grade, cls) == (src_g, src_c) and (day, period) in self.mw.swap_candidates:
                      bg_color = COLORS["cell_target"]; border_color = "#10b981"
             elif self.mw.work_mode == "COVER" and self.mw.selected_cell_info == key:
-                bg_color = COLORS["cell_conflict"]; border_color, border_width = "#ef4444", 2
+                bg_color = COLORS.get("cell_cover", COLORS["cell_selected"]); border_color, border_width = COLORS["accent"], 2
             elif self.mw.work_mode == "CHAIN" and self.mw.chain_floating_data:
                 orig_g, orig_c = self.mw.chain_floating_data['origin_gc']
                 orig_d, orig_p = self.mw.chain_floating_data['origin_time']
                 floater = self.mw.chain_floating_data['teacher']
+                
+                is_ai_mode = getattr(self.mw, 'use_ai_mode', False)
+                is_valid_day = (day == orig_d) if is_ai_mode else True
+
                 if key == (str(orig_g), str(orig_c), orig_d, orig_p):
                     bg_color = COLORS["cell_chain_tgt"]
-                elif (grade, cls) == (str(orig_g), str(orig_c)):
-                     if not self.mw.logic.is_locked(grade, cls, day, period) and not self.mw.logic.is_excluded(grade, day):
-                         if self.mw.logic.is_teacher_busy(floater, day, period):
-                             bg_color = COLORS["cell_conflict"]
+                elif (grade, cls) == (str(orig_g), str(orig_c)) and is_valid_day:
+                     is_target_locked = self.mw.logic.is_locked(grade, cls, day, period)
+                     other_classes = list(self.mw.logic.teachers_schedule.get(floater, {}).get(day, {}).get(period, set()))
+                     is_other_locked = any(self.mw.logic.is_locked(str(og), str(oc), day, period) for og, oc in other_classes if (str(og), str(oc)) != (grade, cls))
+                     
+                     if is_target_locked or is_other_locked:
+                         bg_color = "#cbd5e1"  
+                     elif not self.mw.logic.is_excluded(grade, day):
+                         if self.mw.logic.is_teacher_busy(floater, day, period, ignore_grade=orig_g, ignore_class=orig_c):
+                             bg_color = COLORS["cell_conflict"] 
                          else:
-                             bg_color = COLORS["cell_target"]
+                             bg_color = COLORS["cell_target"] 
                 if teacher_name == floater:
                     bg_color = COLORS["cell_chain_src"]
 
             if teacher_name and teacher_name in self.mw.highlighted_teachers:
                  if bg_color in [COLORS["cell_default"], COLORS["cell_changed"], COLORS["cell_conflict"], COLORS["cell_excluded"]]:
                      bg_color = self.mw.highlighted_teachers[teacher_name]
-                     if bg_color == COLORS["cell_selected"]: border_color = COLORS["accent"]
+                     if bg_color in [COLORS["cell_selected"], COLORS.get("cell_cover")]: border_color = COLORS["accent"]
             if teacher_name and self.mw.logic.check_consecutive_classes(teacher_name, day, period):
                  text_color = "#7c3aed" 
 
         cell.set_content(main_text, sub_text, bg_color, border_color, border_width, text_color)
 
-        watermark = cell.findChild(QLabel, "LockWatermark")
+        # [핵심 성능 최적화] 무거운 findChild 검색 대신 속성 캐싱(Caching)을 활용하여 셀 렌더링 속도를 극대화
+        watermark = getattr(cell, '_lock_watermark', None)
         if is_locked_cell:
             if not watermark:
                 watermark = QLabel("🔒", cell)
@@ -405,6 +437,7 @@ class GridRenderer:
                 cell.installEventFilter(filter_obj)
                 watermark.filter_obj = filter_obj 
                 watermark._is_visible = False
+                cell._lock_watermark = watermark  # 위젯에 참조 저장(캐싱)
                 
             if getattr(watermark, '_last_size', None) != cell.size():
                 watermark.resize(cell.size())
@@ -420,7 +453,7 @@ class GridRenderer:
                     watermark.hide()
                     watermark._is_visible = False
 
-    def add_header(self, text, r, c, rowspan=1, colspan=1, font_size=None, is_pinned=None):
+    def add_header(self, text, r, c, rowspan=1, colspan=1, font_size=None, is_pinned=None, tooltip=None):
         if self.header_pool:
             lbl = self.header_pool.pop()
             lbl.setText(text)
@@ -428,11 +461,18 @@ class GridRenderer:
             lbl = QLabel(text)
             
         lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        lbl.setObjectName("GridHeader") # [수정] 스타일시트 적용을 위한 ObjectName
+        lbl.setObjectName("GridHeader") 
         if font_size:
             lbl.setStyleSheet(f"font-size: {font_size};")
         else:
-            lbl.setStyleSheet("") # 인라인 초기화
+            lbl.setStyleSheet("") 
+            
+        if tooltip:
+            lbl.setToolTip(f"<p style='margin: 4px; white-space: nowrap;'>&nbsp;{tooltip}&nbsp;</p>")
+            lbl.setToolTipDuration(10000) 
+        else:
+            lbl.setToolTip("")
+            lbl.setToolTipDuration(-1) 
             
         lbl.setFixedHeight(36 * rowspan + (rowspan - 1))
         
@@ -471,7 +511,6 @@ class GridRenderer:
             cell.data_key = key
         else:
             cell = ClickableFrame(key)
-            # 신규 생성 시에만 시그널을 연결하여 경고 메시지 방지
             cell.clicked.connect(self.mw.interaction_handler.handle_cell_click)
             cell.right_clicked.connect(self.mw.interaction_handler.handle_right_click)
             cell.cell_dropped.connect(self.mw.interaction_handler.handle_cell_drop)
@@ -536,7 +575,7 @@ class GridRenderer:
             
         control_layout.addStretch()
         
-        btn_replace = QPushButton("🔄변경")
+        btn_replace = QPushButton("🔄")
         btn_replace.setObjectName("ReplaceBtn")
         btn_replace.clicked.connect(lambda checked, d=day: self.mw.change_day_routine_for(d))
         control_layout.addWidget(btn_replace)

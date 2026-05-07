@@ -26,7 +26,7 @@ from gui_grid_renderer import GridRenderer
 class TimetableWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Smart Timetable Manager Pro v3.1.1")
+        self.setWindowTitle("Smart Timetable Manager Pro v3.2.5")
         self.resize(1520, 780)
         
         self.force_light_palette()
@@ -394,10 +394,10 @@ class TimetableWindow(QMainWindow):
         grid_group_layout.addWidget(self.header_splitter)
         grid_group_layout.addWidget(self.main_splitter, 1)
         
+        # [핵심 수정] 상태 표시줄이 CSS의 배너 스타일을 입을 수 있도록 이름표(statusBar)를 맞춰주고,
+        # 방해가 되던 강제 높이 지정과 텍스트 색상(setStyleSheet) 코드를 모두 삭제했습니다!
         self.status_bar = QLabel(" 파일을 불러와주세요.")
-        self.status_bar.setFixedHeight(28) 
-        self.status_bar.setObjectName("StatusBar") 
-        self.status_bar.setStyleSheet("color: #0284c7;") 
+        self.status_bar.setObjectName("statusBar") 
         grid_group_layout.addWidget(self.status_bar)
 
         main_layout.addWidget(grid_group, 1)
@@ -475,8 +475,8 @@ class TimetableWindow(QMainWindow):
             QApplication.restoreOverrideCursor()
             
         if success:
+            # [핵심 수정] 여기서 강제로 색상을 덧씌워 CSS를 박살내던 코드를 삭제했습니다.
             self.status_bar.setText(f"✅ {msg}")
-            self.status_bar.setStyleSheet("color: #059669;")
             self.view_mode = "ALL_WEEK"
             for btn in self.view_btn_group.buttons():
                 if btn.property("view_val") == "ALL_WEEK":
@@ -566,8 +566,8 @@ class TimetableWindow(QMainWindow):
         elif self.work_mode == "CHAIN":
             msg = "✨ [AI 자동 모드] 지정 시 연쇄 충돌 자동 해결." if self.use_ai_mode else "🔗 [연쇄 이동 모드] 수동으로 밀어내기 이동합니다."
         
+        # [핵심 수정] 여기서도 강제로 색상을 덧씌워 CSS를 박살내던 코드를 삭제했습니다.
         self.status_bar.setText(msg)
-        self.status_bar.setStyleSheet(f"color: {COLORS['accent']};") 
         self.update_cell_visuals() # 단 1회만 일괄 반영
 
     def on_view_change(self, btn):

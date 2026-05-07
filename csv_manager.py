@@ -4,6 +4,7 @@ import base64
 import json
 import traceback
 import copy
+import io  # [신규] 셀 내부의 줄바꿈 처리를 위해 추가
 from collections import defaultdict
 import config
 
@@ -100,7 +101,8 @@ class CSVManager:
                 with open(file_path, 'r', encoding='cp949') as f:
                     content = f.read()
                     
-            reader = list(csv.reader(content.splitlines()))
+            # [핵심 수정] splitlines() 대신 io.StringIO를 사용하여 쌍따옴표 내부의 줄바꿈(\n)을 온전히 보호합니다.
+            reader = list(csv.reader(io.StringIO(content)))
 
             if not reader:
                 return False, "파일이 비어있습니다."
@@ -110,6 +112,16 @@ class CSVManager:
 
             if not col_map:
                 return False, "시간표 형식을 인식할 수 없습니다. 열 제목(요일/교시)을 확인해주세요."
+            
+            # [신규] '담임' 헤더 인덱스 찾기
+            hr_col_idx = -1
+            for h_row in header_rows:
+                for idx, cell_val in enumerate(h_row):
+                    if "담임" in str(cell_val).strip():
+                        hr_col_idx = idx
+                        break
+                if hr_col_idx != -1:
+                    break
 
             logic_instance.reset_data()
             config.PERIODS_PER_DAY.update(parsed_periods)
@@ -140,6 +152,7 @@ class CSVManager:
                 else:
                     data_rows.append(row)
 
+            last_grade = None # 엑셀 셀 병합을 위한 이전 학년 기억 변수
             i = 0
             while i < len(data_rows):
                 row = data_rows[i]
@@ -154,15 +167,36 @@ class CSVManager:
                 else:
                     if str(row[0]).strip().isdigit() and str(row[1]).strip().isdigit():
                         grade, cls = str(row[0]).strip(), str(row[1]).strip()
+                    # 학년 셀이 비어있고 반 셀만 있는 경우 (병합된 엑셀 셀 대응)
+                    elif last_grade and not str(row[0]).strip() and str(row[1]).strip().isdigit():
+                        grade, cls = last_grade, str(row[1]).strip()
 
                 if not grade or not cls:
                     i += 1
                     continue
+                
+                last_grade = grade
+
+                # [신규] 학급을 찾았다면, 해당 행에서 담임교사 정보 추출 및 저장
+                if hr_col_idx != -1 and hr_col_idx < len(row):
+                    hr_teacher = str(row[hr_col_idx]).strip()
+                    if hr_teacher:
+                        logic_instance.homeroom_teachers[grade][cls] = hr_teacher
 
                 is_split = False
                 if i + 1 < len(data_rows):
                     next_row = data_rows[i+1]
-                    if not str(next_row[0]).strip() or not self._extract_grade_class(next_row[0])[0]:
+                    
+                    # 다음 행이 교사명 줄인지, 아니면 그냥 다음 반의 시작인지 명확하게 검증
+                    next_is_class = False
+                    if self._extract_grade_class(next_row[0])[0]:
+                        next_is_class = True
+                    elif len(next_row) > 1 and str(next_row[0]).strip().isdigit() and str(next_row[1]).strip().isdigit():
+                        next_is_class = True
+                    elif last_grade and not str(next_row[0]).strip() and len(next_row) > 1 and str(next_row[1]).strip().isdigit():
+                        next_is_class = True
+                        
+                    if not next_is_class:
                         teacher_count = sum(1 for j, _ in col_map.items() if j < len(next_row) and str(next_row[j]).strip())
                         if teacher_count > 0:
                             newline_count = sum(1 for j, _ in col_map.items() if j < len(row) and '\n' in str(row[j]))
@@ -216,7 +250,6 @@ class CSVManager:
                             w2_day = day.replace("1주", "2주")
                             base_day_data = source_for_w2.get(str(g), {}).get(str(c), {}).get(day)
                             if base_day_data is not None:
-                                # [핵심 수정] JSON에서 복사된 데이터일 경우 교시(period) 키가 문자열이므로 정수(int)로 변환
                                 converted_data = {int(k): copy.deepcopy(v) for k, v in base_day_data.items()}
                                 logic_instance.schedule[g][c][w2_day] = converted_data
                             else:
@@ -304,6 +337,10 @@ class CSVManager:
                     for p in range(1, limit + 1):
                         row2.append(str(p))
                         
+                # [신규] 담임교사 헤더 추가
+                row1.append("담임")
+                row2.append("")
+                        
                 writer.writerow(row1)
                 writer.writerow(row2)
                 
@@ -322,6 +359,11 @@ class CSVManager:
                             else:
                                 row_subj.append("")
                                 row_teach.append("")
+                    
+                    # [신규] 저장 시에도 담임 교사 정보 유지하여 맨 끝에 추가
+                    hr_teacher = logic_instance.homeroom_teachers.get(str(g), {}).get(str(c), "")
+                    row_subj.append(hr_teacher)
+                    row_teach.append("")
                                 
                     writer.writerow(row_subj)
                     writer.writerow(row_teach)

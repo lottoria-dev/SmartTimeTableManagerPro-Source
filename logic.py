@@ -30,6 +30,9 @@ class TimetableLogic:
         # 예: {'수': {'1'}, '금': {'3'}} -> 수요일 1학년, 금요일 3학년 제외
         self.excluded_groups = {day: set() for day in config.DAYS}
 
+        # [신규] 학급별 담임교사 정보 저장소 (grade -> class -> teacher_name)
+        self.homeroom_teachers = defaultdict(dict)
+
         # CSV 관리자 인스턴스 생성
         self.csv_manager = CSVManager()
 
@@ -50,6 +53,9 @@ class TimetableLogic:
         
         # 제외 그룹 초기화
         self.excluded_groups = {day: set() for day in config.DAYS}
+        
+        # [신규] 담임교사 정보 초기화
+        self.homeroom_teachers.clear()
         
         self.is_modified = False
 
@@ -495,21 +501,30 @@ class TimetableLogic:
         return streak_len >= 3
 
     def get_cover_candidates(self, day, period):
-        """보강 가능한 교사 목록을 추출합니다."""
+        """보강 가능한 교사 목록을 추출합니다. (3연강은 목록에 포함하되 * 기호로 구분)"""
         candidates = []
         for teacher in sorted(list(self.all_teachers)):
             if self.is_teacher_busy(teacher, day, period): continue
-            if self.check_consecutive_classes(teacher, day, period): continue
             
-            # [수정] 교사가 원래 이 시간에 수업이 있었지만 제외 학년이어서 비어있는 것으로 처리된 경우 구분 기호(*) 추가
+            # [고도화 반영] 3연강 체크 (continue로 건너뛰지 않고 플래그로 확인)
+            is_consecutive = self.check_consecutive_classes(teacher, day, period)
+            
+            # 교사가 원래 이 시간에 수업이 있었지만 제외 학년이어서 비어있는 것으로 처리된 경우 (행사) 기호 추가
             locations = self.teachers_schedule.get(teacher, {}).get(day, {}).get(period, set())
-            is_asterisk = False
+            is_excluded_time = False
             for g, c in locations:
                 if self.is_excluded(g, day):
-                    is_asterisk = True
+                    is_excluded_time = True
                     break
             
-            display_name = f"{teacher}*" if is_asterisk else teacher
+            display_name = teacher
+            
+            # 기존 학년 행사로 인한 공강은 (행사) 표시, 3연강은 * 표시
+            if is_excluded_time:
+                display_name += "(행사)"
+            if is_consecutive:
+                display_name += "*"
+                
             candidates.append(display_name)
         
         candidates.append("특별보강(교장)")

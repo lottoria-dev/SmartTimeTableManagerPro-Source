@@ -16,7 +16,7 @@ class HelpDialog(QDialog):
     """도움말 팝업창"""
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("사용법 안내 - v3.0.0")
+        self.setWindowTitle("사용법 안내 - v3.2.5")
         self.resize(650, 600)
         self.setStyleSheet("background-color: #F8FAFC; color: #1e293b;") # 고급스러운 배경색
         
@@ -40,10 +40,10 @@ class HelpDialog(QDialog):
         """)
         
         help_content = """
-<h2 style="color: #0f172a;">📖 스마트 시간표 매니저(Smart Timetable Manager Pro) v3.1.1</h2>
+<h2 style="color: #0f172a;">📖 스마트 시간표 매니저<br>(Smart Timetable Manager Pro) v3.2.5</h2>
 <hr style="border-top: 1px solid #e2e8f0; margin: 10px 0;">
 <h3 style="color: #1d4ed8;">1. 기본 사용법</h3>
-<ul style="line-height: 1.6;">
+<ul style="line-height: 1.4;">
     <li><b>📂 불러오기:</b> CSV 형식의 시간표 파일을 불러옵니다.<br>
     <span style="font-size: 10pt; color: #64748b;">
     ※ 분리형, 병합형, 저장본 모두 지원<br>
@@ -56,14 +56,14 @@ class HelpDialog(QDialog):
 </ul>
 
 <h3 style="color: #1d4ed8;">2. 제어 패널(학년 제외 및 요일 변경)</h3>
-<ul style="line-height: 1.6;">
+<ul style="line-height: 1.4;">
     <li>각 요일 상단의 제어 패널을 통해 <b style="color: #b91c1c;">학년 단위로 행사/체험학습 등을 일괄 제외</b>할 수 있습니다.</li>
     <li>제외된 학년은 교환, 연쇄 이동 등의 대상에서 완벽히 배제됩니다.</li>
     <li><b>🔄 변경</b> 버튼을 통해 해당 요일의 모든 일과를 다른 요일의 기초 시간표로 손쉽게 덮어씌울 수 있습니다.</li>
 </ul>
 
 <h3 style="color: #1d4ed8;">3. 작업 모드 상세</h3>
-<ul style="line-height: 1.6;">
+<ul style="line-height: 1.4;">
     <li><b>조회 모드:</b> 수업 클릭 시 교사 일정 강조. 우클릭으로 개별 <b>🔒 잠금/해제</b> 가능.</li>
     <li><b>맞교환 모드:</b> 바꿀 두 수업을 차례로 클릭하거나 <b>드래그 앤 드롭</b>합니다.</li>
     <li><b>보강 모드:</b> 결강 수업 선택 후 대체 교사 배정.</li>
@@ -72,15 +72,15 @@ class HelpDialog(QDialog):
 </ul>
 
 <hr style="border-top: 1px solid #e2e8f0; margin: 15px 0;">
-<div style="font-size: 10pt; color: #64748b; line-height: 1.6;">
+<div style="font-size: 10pt; color: #64748b; line-height: 1.0;">
     <b>■ 단축키 안내</b><br>
     - [Ctrl + O] 불러오기 / [Ctrl + S] 저장<br>
     - [Ctrl + Z] 실행취소 / [Ctrl + C] 클립보드 복사<br>
     - [1 ~ 5] 모드 빠른 전환<br>
     <br>
     <b>■ 개발자 정보</b><br>
-    - 버전: 3.1.1<br>
-    - 최종 업데이트: 2026.04.12.<br>
+    - 버전: 3.2.5<br>
+    - 최종 업데이트: 2026.05.07.<br>
     - 문의: mathtime.ai@gmail.com<br>
     - 정식 배포 페이지를 제외한 곳에서 임의의 수정 및 재배포를 금지합니다.<br>
     © Copyright 2026 lottoria-dev. All rights reserved.
